@@ -22,9 +22,22 @@ reis = "reis.cli:main"
 dev = [
     "pytest>=8",
     "pytest-cov>=5",
+    "pytest-xdist>=3.6",
+    "diff-cover>=9.2",
     "ruff>=0.8",
     "mypy>=1.13",
     "import-linter>=2.1",
+    "pre-commit>=4.0",
+    "commitizen>=4.1",
+    "codespell>=2.4",
+    "vulture>=2.13",
+    "radon>=6.0",
+    "xenon>=0.9",
+    "deptry>=0.21",
+    "bandit>=1.8",
+    "pip>=24.2",
+    "pip-audit>=2.7",
+    "mutmut>=3.0",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -50,9 +63,24 @@ files = ["src/reis"]
 testpaths = ["tests"]
 pythonpath = ["."]
 python_files = "test_*.py"
+addopts = [
+    "--tb=short",
+    "--strict-markers",
+    "--cov=reis",
+    "--cov-report=term-missing",
+    "--cov-fail-under=90",
+]
 markers = [
     "unit: fast, isolated tests",
     "integration: end-to-end validation runs",
+]
+
+[tool.coverage.report]
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
 ]
 
 [tool.importlinter]
@@ -71,3 +99,38 @@ source_modules = [
     "reis.rules",
 ]
 forbidden_modules = ["click"]
+
+[tool.commitizen]
+name = "cz_conventional_commits"
+version = "0.1.0"
+version_files = ["pyproject.toml:^version"]
+tag_format = "v$version"
+update_changelog_on_bump = true
+changelog_file = "CHANGELOG.md"
+major_version_zero = true
+
+[tool.codespell]
+skip = ".git,uv.lock,.venv,.mypy_cache,.ruff_cache,.pytest_cache,mutants"
+# "unparseable" is a valid English variant used in rule messages
+ignore-words-list = "unparseable"
+check-filenames = true
+
+[tool.vulture]
+min_confidence = 80
+paths = ["src/reis", "tests"]
+sort_by_size = true
+
+[tool.bandit]
+exclude_dirs = ["tests", ".venv"]
+
+[tool.deptry]
+known_first_party = ["reis"]
+exclude = [".venv", "tests", "mutants"]
+
+[tool.mutmut]
+source_paths = ["src/reis/"]
+# --no-cov drops the coverage overhead and the global --cov-fail-under gate
+# from addopts; mutmut 3 runs pytest in-process, so extra args must go here
+# rather than in a `runner` setting (which mutmut 3 ignores).
+pytest_add_cli_args = ["--no-cov", "--tb=short"]
+pytest_add_cli_args_test_selection = ["tests/"]

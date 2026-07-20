@@ -7,3 +7,5 @@ __pycache__/
 .coverage
 .serena/
 .code-review-graph/
+mutants/
+coverage.xml
