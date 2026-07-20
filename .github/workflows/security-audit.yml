@@ -1,0 +1,124 @@
+# Daily security audit — notification layer, zero secrets required.
+#
+# Philosophy (same as portolan-cli): separate GATE (the tests.yml security
+# job blocks PRs) from NOTIFICATION (this workflow manages a tracking issue).
+# Fix PRs come from Dependabot (dependabot.yml + auto-merge), so no bot PAT
+# is needed here.
+name: Security Audit
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: |
+          uv python install 3.13
+          uv sync
+
+      - name: Run pip-audit
+        id: audit
+        run: |
+          IGNORE_ARGS=$(uv run python scripts/pip_audit_ignores.py)
+          # shellcheck disable=SC2086
+          if uv run pip-audit $IGNORE_ARGS --format json --output audit.json; then
+            echo "vulnerable=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "vulnerable=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload audit report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: security-audit-report
+          path: audit.json
+          retention-days: 30
+          if-no-files-found: ignore
+
+      - name: Open or update tracking issue
+        if: steps.audit.outputs.vulnerable == 'true'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const fs = require('fs');
+            const title = 'Security: dependency vulnerabilities detected';
+            let vulnList = '';
+            try {
+              const report = JSON.parse(fs.readFileSync('audit.json', 'utf8'));
+              for (const dep of report.dependencies || []) {
+                for (const vuln of dep.vulns || []) {
+                  vulnList += `\n### ${dep.name} (${dep.version})\n`;
+                  vulnList += `- **ID:** ${vuln.id}\n`;
+                  vulnList += `- **Fix versions:** ${vuln.fix_versions?.join(', ') || 'none available'}\n`;
+                }
+              }
+            } catch (e) {
+              vulnList = '\n*Could not parse audit.json — see the workflow run artifact.*\n';
+            }
+            const body = [
+              'Nightly pip-audit found vulnerabilities in the dependency tree.',
+              vulnList,
+              '### How to resolve',
+              '',
+              '1. Check whether Dependabot already opened an upgrade PR.',
+              '2. If not: `uv lock --upgrade-package <name>` and open a PR.',
+              '3. If no fix exists yet, add the ID to `.pip-audit-ignores`',
+              '   with an expiry date and reason.',
+              '',
+              `Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              '',
+              '*Managed by security-audit.yml; auto-closes when the audit is clean.*',
+            ].join('\n');
+            const {data: issues} = await github.rest.issues.listForRepo({
+              ...context.repo, state: 'open', labels: 'security,automated',
+            });
+            const existing = issues.find(i => i.title === title);
+            if (existing) {
+              await github.rest.issues.update({
+                ...context.repo, issue_number: existing.number, body,
+              });
+            } else {
+              await github.rest.issues.create({
+                ...context.repo, title, body, labels: ['security', 'automated'],
+              });
+            }
+
+      - name: Close tracking issue when clean
+        if: steps.audit.outputs.vulnerable == 'false'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const title = 'Security: dependency vulnerabilities detected';
+            const {data: issues} = await github.rest.issues.listForRepo({
+              ...context.repo, state: 'open', labels: 'security,automated',
+            });
+            for (const issue of issues.filter(i => i.title === title)) {
+              await github.rest.issues.createComment({
+                ...context.repo, issue_number: issue.number,
+                body: 'pip-audit is clean again; closing.',
+              });
+              await github.rest.issues.update({
+                ...context.repo, issue_number: issue.number,
+                state: 'closed', state_reason: 'completed',
+              });
+            }

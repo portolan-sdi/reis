@@ -1,0 +1,93 @@
+# Two-stage strategy:
+#   commit stage  — fast, file-scoped checks (formatting, hygiene, spelling,
+#                   workflow lint). Must stay sub-second-ish.
+#   pre-push stage — whole-project gates (types, dead code, complexity,
+#                   dependency hygiene, import contracts). CI runs both
+#                   stages via `pre-commit run --all-files [--hook-stage
+#                   pre-push]`, so nothing here is skippable by accident.
+repos:
+  - repo: https://github.com/commitizen-tools/commitizen
+    rev: v4.1.0
+    hooks:
+      - id: commitizen
+        stages: [commit-msg]
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files
+        args: ['--maxkb=500']
+      - id: check-merge-conflict
+      - id: mixed-line-ending
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.1
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/codespell-project/codespell
+    rev: v2.4.2
+    hooks:
+      - id: codespell
+        additional_dependencies: [tomli]
+
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.12
+    hooks:
+      - id: actionlint
+
+  - repo: https://github.com/zizmorcore/zizmor-pre-commit
+    rev: v1.26.1
+    hooks:
+      - id: zizmor
+        args: [--no-online-audits]
+
+  - repo: local
+    hooks:
+      - id: deptry
+        name: deptry (dependency hygiene)
+        entry: uv run deptry .
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+
+      - id: mypy
+        name: mypy (strict)
+        entry: uv run mypy
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+
+      - id: vulture
+        name: vulture (dead code)
+        entry: uv run vulture
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+
+      - id: xenon
+        name: xenon (complexity ceiling)
+        entry: uv run xenon --max-absolute=D --max-modules=C --max-average=B src/reis tests
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+
+      - id: import-linter
+        name: import-linter (layer contracts)
+        entry: uv run lint-imports
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+
+      - id: fast-tests
+        name: fast tests (opt-in via ENABLE_PRE_PUSH_TESTS=1)
+        entry: bash -c 'if [ "${ENABLE_PRE_PUSH_TESTS:-0}" = "1" ]; then uv run pytest -n auto --tb=short; fi'
+        language: system
+        pass_filenames: false
+        stages: [pre-push]

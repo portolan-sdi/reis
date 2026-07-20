@@ -1,0 +1,20 @@
+name: Feature request
+description: Propose a new validation rule or capability
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: >-
+        For new rules: which Portolan spec requirement would it check, and
+        what does a violating catalog look like?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Expected findings, severity, and rule ID if applicable.
+    validations:
+      required: true

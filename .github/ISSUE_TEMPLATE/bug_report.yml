@@ -1,0 +1,32 @@
+name: Bug report
+description: A validation result is wrong, or reis crashes
+labels: [bug]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Include the command you ran and the output you got.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: catalog
+    attributes:
+      label: Minimal catalog to reproduce
+      description: >-
+        The smallest catalog JSON (or snippet) that triggers the problem.
+        Strip anything private.
+      render: json
+  - type: input
+    id: version
+    attributes:
+      label: reis version
+      description: Output of `reis --version`
+    validations:
+      required: true
