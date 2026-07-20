@@ -1,0 +1,222 @@
+"""Visualization rules (spec: core.md, Visualization; formats.md, PMTiles).
+
+Metadata-checkable subset only: thumbnail presence, style assets when a
+visualization derivative exists, and PMTiles registration. Whether a
+render-from-source path is genuinely viable (a "small" GeoParquet, a
+display-ready COG) is not decidable from metadata, so its absence is at
+most an INFO nudge, never an error.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterable
+
+from reis.catalog import CatalogGraph, Node
+from reis.model import Finding, Severity
+from reis.rule import Rule
+from reis.rules._common import links_of
+from reis.rules.assets import _assets_of
+
+PMTILES_MEDIA_TYPE = "application/vnd.pmtiles"
+_THUMBNAIL_TYPES = ("image/png", "image/jpeg")
+_WEB_MAP_LINKS_PREFIX = "https://stac-extensions.github.io/web-map-links/"
+# Render-from-source is plausible for small files; above this, a missing
+# visual derivative is worth a nudge. Deliberately conservative.
+_LARGE_VECTOR_BYTES = 100_000_000
+
+
+def _roles(asset: dict[str, object]) -> list[str]:
+    raw = asset.get("roles")
+    if not isinstance(raw, list):
+        return []
+    return [r for r in raw if isinstance(r, str)]
+
+
+def is_geospatial(node: Node, graph: CatalogGraph) -> bool | None:
+    """Best-effort geospatial detection from metadata alone.
+
+    The spec identifies a tabular collection by its Parquet data having no
+    geometry column — a data-pass fact. From metadata we can only look for
+    positive signals: an item with a geometry, a geometry column declared
+    via the table extension, or an inherently spatial media type. With no
+    signal either way, return None and let callers skip rather than guess.
+    """
+    for child in graph.children_of(node):
+        if child.kind == "item" and child.data.get("geometry") is not None:
+            return True
+    columns = node.data.get("table:columns")
+    if isinstance(columns, list):
+        for column in columns:
+            if isinstance(column, dict):
+                name = str(column.get("name", "")).casefold()
+                ctype = str(column.get("type", "")).casefold()
+                if name in ("geometry", "geom") or "geometry" in ctype:
+                    return True
+        return False  # declared columns, none of them a geometry
+    for _pointer, _key, asset in _assets_of(node):
+        media_type = asset.get("type")
+        if isinstance(media_type, str) and (
+            media_type == PMTILES_MEDIA_TYPE
+            or media_type.startswith("image/tiff")
+            or media_type == "application/vnd.laszip+copc"
+        ):
+            return True
+    return None
+
+
+def _pmtiles_registration(node: Node) -> tuple[bool, bool]:
+    """(has_pmtiles_asset, has_pmtiles_link) for a collection."""
+    has_asset = any(
+        asset.get("type") == PMTILES_MEDIA_TYPE
+        or (isinstance(asset.get("href"), str) and str(asset["href"]).endswith(".pmtiles"))
+        for _p, _k, asset in _assets_of(node)
+    )
+    has_link = any(link.get("rel") == "pmtiles" for link in links_of(node))
+    return has_asset, has_link
+
+
+class ThumbnailRule(Rule):
+    """Every geospatial collection carries a thumbnail asset."""
+
+    id = "PTL-VIZ-001"
+    default_severity = Severity.ERROR
+    description = "geospatial collections must include a thumbnail asset (png or jpeg)"
+    kinds = ("collection",)
+
+    def check(self, node: Node, graph: CatalogGraph) -> Iterable[Finding]:
+        if is_geospatial(node, graph) is not True:
+            return
+        thumbnails = [
+            (pointer, key, asset)
+            for pointer, key, asset in _assets_of(node)
+            if "thumbnail" in _roles(asset)
+        ]
+        if not thumbnails:
+            yield self.finding(
+                node,
+                "geospatial collection has no asset with the 'thumbnail' role",
+                json_pointer="/assets",
+                fix_hint="add a thumbnail.png generated from the collection's default styling",
+            )
+            return
+        for pointer, key, asset in thumbnails:
+            media_type = asset.get("type")
+            if media_type not in _THUMBNAIL_TYPES:
+                yield self.finding(
+                    node,
+                    f"thumbnail asset '{key}' has type {media_type!r}, expected image/png"
+                    " or image/jpeg",
+                    json_pointer=f"{pointer}/type",
+                )
+
+
+class StylesForDerivativeRule(Rule):
+    """A collection with a visualization derivative registers style assets.
+
+    Self-rendering collections (no derivative) are exempt: whether the data
+    asset is display-ready is not decidable from metadata.
+    """
+
+    id = "PTL-VIZ-002"
+    default_severity = Severity.ERROR
+    description = "collections with a visual derivative must register style assets"
+    kinds = ("collection",)
+
+    def check(self, node: Node, graph: CatalogGraph) -> Iterable[Finding]:
+        has_visual = any("visual" in _roles(asset) for _p, _k, asset in _assets_of(node))
+        has_pmtiles_asset, has_pmtiles_link = _pmtiles_registration(node)
+        if not (has_visual or has_pmtiles_asset or has_pmtiles_link):
+            return
+        if not any("style" in _roles(asset) for _p, _k, asset in _assets_of(node)):
+            yield self.finding(
+                node,
+                "collection has a visualization derivative but no asset with the 'style' role",
+                json_pointer="/assets",
+                fix_hint="register the MapLibre style in styles/ as a collection-level"
+                ' asset with roles ["style"]',
+            )
+
+
+class PMTilesRegistrationRule(Rule):
+    """A provided PMTiles file is registered per web-map-links."""
+
+    id = "PTL-VIZ-003"
+    default_severity = Severity.ERROR
+    description = "PMTiles must be registered via a rel:'pmtiles' link (web-map-links v1.3.0)"
+    kinds = ("collection",)
+
+    def check(self, node: Node, graph: CatalogGraph) -> Iterable[Finding]:
+        has_asset, has_link = _pmtiles_registration(node)
+        if not has_asset and not has_link:
+            return
+        if has_asset and not has_link:
+            yield self.finding(
+                node,
+                "PMTiles asset is not registered through a rel:'pmtiles' link",
+                json_pointer="/links",
+            )
+            return
+        for index, link in enumerate(links_of(node)):
+            if link.get("rel") != "pmtiles":
+                continue
+            if link.get("type") != PMTILES_MEDIA_TYPE:
+                yield self.finding(
+                    node,
+                    f"rel:'pmtiles' link has type {link.get('type')!r},"
+                    f" expected '{PMTILES_MEDIA_TYPE}'",
+                    json_pointer=f"/links/{index}/type",
+                )
+            layers = link.get("pmtiles:layers")
+            if not isinstance(layers, list) or not layers:
+                yield self.finding(
+                    node,
+                    "rel:'pmtiles' link has no pmtiles:layers array of default-visible layers",
+                    json_pointer=f"/links/{index}",
+                )
+        extensions = node.data.get("stac_extensions")
+        declared = isinstance(extensions, list) and any(
+            isinstance(uri, str) and uri.startswith(_WEB_MAP_LINKS_PREFIX) for uri in extensions
+        )
+        if not declared:
+            yield self.finding(
+                node,
+                "rel:'pmtiles' link used without declaring the web-map-links extension"
+                " schema in stac_extensions",
+                json_pointer="/stac_extensions",
+            )
+
+
+class LargeVectorWithoutVisualRule(Rule):
+    """Large vector data without a visual derivative gets a nudge.
+
+    The spec requires a zero-infrastructure render path; render-from-source
+    is only plausible for small files. The size threshold is heuristic, so
+    this is INFO, never an error.
+    """
+
+    id = "PTL-VIZ-004"
+    default_severity = Severity.INFO
+    description = "large vector collections likely need a visual derivative (PMTiles)"
+    kinds = ("collection",)
+
+    def check(self, node: Node, graph: CatalogGraph) -> Iterable[Finding]:
+        if is_geospatial(node, graph) is not True:
+            return
+        has_visual = any("visual" in _roles(asset) for _p, _k, asset in _assets_of(node))
+        has_pmtiles_asset, has_pmtiles_link = _pmtiles_registration(node)
+        if has_visual or has_pmtiles_asset or has_pmtiles_link:
+            return
+        for _pointer, key, asset in _assets_of(node):
+            if "data" not in _roles(asset):
+                continue
+            if asset.get("type") != "application/vnd.apache.parquet":
+                continue
+            size = asset.get("file:size")
+            if isinstance(size, int) and not isinstance(size, bool) and size > _LARGE_VECTOR_BYTES:
+                yield self.finding(
+                    node,
+                    f"vector data asset '{key}' is {size} bytes with no visual"
+                    " derivative; rendering from source is unlikely to be viable",
+                    json_pointer="/assets",
+                    fix_hint="publish a PMTiles derivative with a MapLibre style",
+                )
