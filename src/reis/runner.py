@@ -11,10 +11,31 @@ from reis.catalog import ROOT_CATALOG, CatalogGraph
 from reis.config import RulesConfig
 from reis.model import Finding, Report, Severity
 from reis.rule import Rule
+from reis.schema import SCH_INVALID, validate_schema
 from reis.structural import STR_INVALID, validate_structural
 
 GEN_MISSING_ROOT = "PTL-GEN-000"
 GEN_UNPARSEABLE = "PTL-GEN-001"
+
+_Validator = Callable[[dict[str, Any]], list[str]]
+
+
+def _optional_passes(
+    graph: CatalogGraph,
+    config: RulesConfig,
+    *,
+    structural: bool,
+    structural_validator: _Validator | None,
+    schema: bool,
+    schema_validator: _Validator | None,
+) -> list[Finding]:
+    """Run the opt-in structural and schema passes, honouring their disable ids."""
+    findings: list[Finding] = []
+    if structural and STR_INVALID not in config.disabled:
+        findings.extend(validate_structural(graph, structural_validator))
+    if schema and SCH_INVALID not in config.disabled:
+        findings.extend(validate_schema(graph, schema_validator))
+    return findings
 
 
 def validate(
@@ -24,6 +45,8 @@ def validate(
     *,
     structural: bool = False,
     structural_validator: Callable[[dict[str, Any]], list[str]] | None = None,
+    schema: bool = False,
+    schema_validator: Callable[[dict[str, Any]], list[str]] | None = None,
 ) -> Report:
     """Validate a local Portolan catalog tree.
 
@@ -33,6 +56,12 @@ def validate(
     network, and on by default in the CLI. Disabling ``PTL-STR-001`` via
     ``config`` skips the structural pass. ``structural_validator`` injects an
     alternate validator, chiefly for offline testing.
+
+    When ``schema`` is true the Portolan profile schema pass runs too, applying
+    the published JSON Schema to every object (see :mod:`reis.schema`); it is
+    off by default because it reaches the network and overlaps the metadata
+    pass. Disabling ``PTL-SCH-001`` via ``config`` skips it. ``schema_validator``
+    injects an alternate validator, chiefly for offline testing.
     """
     if rules is None:
         from reis.rules import DEFAULT_RULES
@@ -97,8 +126,16 @@ def validate(
                 continue
             findings.extend(rule.check(node, graph))
 
-    if structural and STR_INVALID not in config.disabled:
-        findings.extend(validate_structural(graph, structural_validator))
+    findings.extend(
+        _optional_passes(
+            graph,
+            config,
+            structural=structural,
+            structural_validator=structural_validator,
+            schema=schema,
+            schema_validator=schema_validator,
+        )
+    )
 
     if config.severity_overrides:
         findings = [

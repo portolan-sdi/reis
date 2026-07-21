@@ -10,7 +10,7 @@ readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10"
 authors = [{ name = "Portolan contributors" }]
-dependencies = ["click>=8.1", "stac-valid>=4.2"]
+dependencies = ["click>=8.1", "jsonschema>=4.0", "stac-valid>=4.2"]
 
 [project.urls]
 Homepage = "https://github.com/portolan-sdi/reis"
@@ -64,6 +64,11 @@ files = ["src/reis"]
 module = "stac_validator.*"
 ignore_missing_imports = true
 
+# jsonschema ships no py.typed marker; stubs live in the separate types-jsonschema.
+[[tool.mypy.overrides]]
+module = "jsonschema.*"
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
@@ -78,7 +83,7 @@ addopts = [
 markers = [
     "unit: fast, isolated tests",
     "integration: end-to-end validation runs",
-    "network: exercises the real stac-validator (needs schemas.stacspec.org)",
+    "network: exercises real validators (needs schemas.stacspec.org / schema.portolan-sdi.org)",
 ]
 
 [tool.coverage.report]

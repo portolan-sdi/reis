@@ -1573,6 +1573,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
+    { name = "jsonschema" },
     { name = "stac-valid" },
 ]
 
@@ -1601,6 +1602,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "click", specifier = ">=8.1" },
+    { name = "jsonschema", specifier = ">=4.0" },
     { name = "stac-valid", specifier = ">=4.2" },
 ]
 

@@ -2,16 +2,16 @@
 
 A validator and linter for [Portolan](https://www.portolan-sdi.org/) catalogs. Named after [Piri Reis](https://www.unesco.org/en/memory-world/piri-reis-world-map-1513).
 
-Portolan conformance is defined by passing this validator. reis implements two of the spec's separable passes:
+Portolan conformance is defined by passing this validator. reis implements three of the spec's separable passes:
 
 - the **metadata pass** — every requirement in the [Portolan spec](https://github.com/portolan-sdi/portolan-spec) checkable from the catalog's JSON metadata alone, without reading asset bytes;
 - the **structural pass** — STAC 1.1.0 core validity, delegated to [`stac-validator`](https://github.com/stac-utils/stac-validator) (the maintained `stac-valid` distribution). This validates each object against the STAC 1.1.0 *core* schema only; the extensions an object declares — including the Portolan profile — are the metadata pass's domain, so a not-yet-published extension schema never breaks it.
+- the **schema pass** — the published [Portolan profile schema](https://schema.portolan-sdi.org/v0.1.0/schema.json) applied directly to every object, which the spec calls the machine-checkable core of the metadata pass. reis implements those requirements by hand (for precise messages and fix hints), so this pass overlaps them by design: it is an authoritative cross-check that catches drift or gaps between the hand rules and the canonical schema. It is therefore **opt-in** (`--schema`), and a defect both catch is reported twice — once by a metadata rule, once by the schema.
 
 Not covered here (separate passes):
 
 - the data pass (GeoParquet spatial ordering and row-group statistics, embedded COG statistics)
 - live-hosting checks (CORS, HTTP range requests)
-- field validation against the published Portolan profile schema
 
 ## Install
 
@@ -25,11 +25,14 @@ uv tool install reis
 reis check path/to/catalog
 reis check --json path/to/catalog
 reis check --no-structural path/to/catalog
+reis check --schema path/to/catalog
 ```
 
 Exit code 0 when the catalog passes (no errors; warnings and infos allowed), 1 when errors were found.
 
-`reis check` runs both passes by default. The structural pass fetches the STAC core schemas from `schemas.stacspec.org` (cached in-process); when it cannot reach them it emits a single `PTL-STR-000` warning rather than failing, so the offline metadata findings still surface. Pass `--no-structural` to skip it and run the metadata pass alone.
+`reis check` runs the metadata and structural passes by default. The structural pass fetches the STAC core schemas from `schemas.stacspec.org` (cached in-process); when it cannot reach them it emits a single `PTL-STR-000` warning rather than failing, so the offline metadata findings still surface. Pass `--no-structural` to skip it and run the metadata pass alone.
+
+`--schema` additionally runs the schema pass, fetching the Portolan profile schema from the URI the root catalog declares (falling back to `schema.portolan-sdi.org`) and validating every object against it. Like the structural pass it degrades to a single `PTL-SCH-000` warning when the schema is unreachable. It is off by default because it overlaps the metadata pass; turn it on to cross-check reis's hand rules against the canonical schema.
 
 ## Library
 
@@ -43,10 +46,10 @@ for finding in report.findings:
           finding.path, finding.message)
 ```
 
-`validate` runs the metadata pass only. Add `structural=True` to also run the STAC structural pass (this reaches the network); the CLI turns it on by default:
+`validate` runs the metadata pass only. Add `structural=True` to also run the STAC structural pass, or `schema=True` to run the Portolan profile schema pass (both reach the network); the CLI turns `structural` on by default:
 
 ```python
-report = validate("path/to/catalog", structural=True)
+report = validate("path/to/catalog", structural=True, schema=True)
 ```
 
 Rules can be disabled or re-severitied:
