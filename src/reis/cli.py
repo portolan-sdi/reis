@@ -38,10 +38,17 @@ def main() -> None:
     default=True,
     help="Run the STAC 1.1.0 structural pass via stac-validator (needs network).",
 )
-def check(catalog_path: Path, as_json: bool, structural: bool) -> None:
-    """Validate CATALOG_PATH: the Portolan metadata pass, and — unless
-    --no-structural is given — the STAC 1.1.0 structural pass."""
-    report = validate(catalog_path, structural=structural)
+@click.option(
+    "--schema/--no-schema",
+    "schema",
+    default=False,
+    help="Also validate against the published Portolan profile schema (needs network).",
+)
+def check(catalog_path: Path, as_json: bool, structural: bool, schema: bool) -> None:
+    """Validate CATALOG_PATH: the Portolan metadata pass, the STAC 1.1.0
+    structural pass (unless --no-structural), and — with --schema — the
+    published Portolan profile schema."""
+    report = validate(catalog_path, structural=structural, schema=schema)
     if as_json:
         click.echo(json_module.dumps(report.to_dict(), indent=2))
     else:
