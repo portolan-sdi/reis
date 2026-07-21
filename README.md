@@ -92,9 +92,39 @@ Validation is local-directory only for now. `CatalogGraph` (`src/reis/catalog.py
 ## Development
 
 ```bash
-uv sync
-uv run pytest
-uv run ruff check .
-uv run mypy
-uv run lint-imports
+uv sync                       # install (the dev dependency group is included)
+uv run pre-commit install \
+  --hook-type pre-commit \
+  --hook-type commit-msg \
+  --hook-type pre-push        # wire the quality gates
+```
+
+Commits follow [Conventional Commits](https://www.conventionalcommits.org) — enforced by commitizen on the `commit-msg` hook.
+
+The gates run in two stages, both reproduced by CI and runnable locally:
+
+```bash
+# fast gate (every commit): ruff, ruff-format, codespell,
+# actionlint, zizmor, file hygiene
+uv run pre-commit run --all-files
+
+# full gate (every push): deptry, mypy (strict), vulture,
+# xenon (complexity), import-linter
+uv run pre-commit run --all-files --hook-stage pre-push
+```
+
+Tests carry a 90% coverage floor:
+
+```bash
+uv run pytest                 # full suite
+uv run pytest -n auto         # parallelised, as CI runs it
+uv run pytest -m unit         # fast, isolated tests only
+```
+
+Markers are `unit`, `integration`, and `network`. The `network` tests drive the real `stac-validator` against `schemas.stacspec.org` and self-skip when offline. The pre-push hook also runs the fast tests when `ENABLE_PRE_PUSH_TESTS=1` is set.
+
+Mutation testing (run nightly in CI):
+
+```bash
+uv run mutmut run
 ```
