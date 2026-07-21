@@ -33,9 +33,15 @@ def main() -> None:
     type=click.Path(exists=True, file_okay=False, path_type=Path),
 )
 @click.option("--json", "as_json", is_flag=True, help="Emit the report as JSON.")
-def check(catalog_path: Path, as_json: bool) -> None:
-    """Run the Portolan metadata validation pass on CATALOG_PATH."""
-    report = validate(catalog_path)
+@click.option(
+    "--structural/--no-structural",
+    default=True,
+    help="Run the STAC 1.1.0 structural pass via stac-validator (needs network).",
+)
+def check(catalog_path: Path, as_json: bool, structural: bool) -> None:
+    """Validate CATALOG_PATH: the Portolan metadata pass, and — unless
+    --no-structural is given — the STAC 1.1.0 structural pass."""
+    report = validate(catalog_path, structural=structural)
     if as_json:
         click.echo(json_module.dumps(report.to_dict(), indent=2))
     else:

@@ -13,6 +13,50 @@ from reis.rule import Rule
 from reis.rules._common import links_of
 
 _REQUIRED = ("AGENTS.md", "README.md")
+_MARKDOWN = "text/markdown"
+
+
+def _check_markdown_link(
+    rule: Rule, node: Node, graph: CatalogGraph, *, rel: str, target: str
+) -> Iterable[Finding]:
+    """Findings for a required ``rel`` link pointing at a sibling markdown file.
+
+    Shared by the AGENTS.md and README.md link rules: exactly one relative,
+    ``text/markdown`` link that resolves to ``target`` in the object's own
+    directory.
+    """
+    matches = [(index, link) for index, link in enumerate(links_of(node)) if link.get("rel") == rel]
+    if not matches:
+        yield rule.finding(
+            node,
+            f"missing rel:{rel!r} link to {target}",
+            json_pointer="/links",
+            fix_hint=f'add {{"rel": "{rel}", "href": "./{target}", "type": "text/markdown"}}',
+        )
+        return
+    expected = node.path.parent / target
+    for index, link in matches:
+        if link.get("type") != _MARKDOWN:
+            yield rule.finding(
+                node,
+                f"rel:{rel!r} link has type {link.get('type')!r}, expected 'text/markdown'",
+                json_pointer=f"/links/{index}/type",
+            )
+        href = link.get("href")
+        if not isinstance(href, str) or not href or is_absolute_href(href):
+            yield rule.finding(
+                node,
+                f"rel:{rel!r} link href must be a relative path, got {href!r}",
+                json_pointer=f"/links/{index}/href",
+            )
+            continue
+        resolved = graph.resolve_path(node, href)
+        if resolved != expected or not graph.file_exists(expected):
+            yield rule.finding(
+                node,
+                f"rel:{rel!r} link href {href!r} does not resolve to the sibling {target}",
+                json_pointer=f"/links/{index}/href",
+            )
 
 
 class RequiredFilesRule(Rule):
@@ -53,39 +97,16 @@ class AgentsLinkRule(Rule):
     kinds = ("catalog", "collection")
 
     def check(self, node: Node, graph: CatalogGraph) -> Iterable[Finding]:
-        agents_links = [
-            (index, link)
-            for index, link in enumerate(links_of(node))
-            if link.get("rel") == "agents"
-        ]
-        if not agents_links:
-            yield self.finding(
-                node,
-                "missing rel:'agents' link to AGENTS.md",
-                json_pointer="/links",
-                fix_hint='add {"rel": "agents", "href": "./AGENTS.md", "type": "text/markdown"}',
-            )
-            return
-        for index, link in agents_links:
-            if link.get("type") != "text/markdown":
-                yield self.finding(
-                    node,
-                    f"rel:'agents' link has type {link.get('type')!r}, expected 'text/markdown'",
-                    json_pointer=f"/links/{index}/type",
-                )
-            href = link.get("href")
-            expected = node.path.parent / "AGENTS.md"
-            if not isinstance(href, str) or not href or is_absolute_href(href):
-                yield self.finding(
-                    node,
-                    f"rel:'agents' link href must be a relative path, got {href!r}",
-                    json_pointer=f"/links/{index}/href",
-                )
-                continue
-            resolved = graph.resolve_path(node, href)
-            if resolved != expected or not graph.file_exists(expected):
-                yield self.finding(
-                    node,
-                    f"rel:'agents' link href '{href}' does not resolve to the sibling AGENTS.md",
-                    json_pointer=f"/links/{index}/href",
-                )
+        yield from _check_markdown_link(self, node, graph, rel="agents", target="AGENTS.md")
+
+
+class ReadmeLinkRule(Rule):
+    """README.md is referenced through a rel:'describedby' markdown link."""
+
+    id = "PTL-FIL-003"
+    default_severity = Severity.ERROR
+    description = "README.md must be linked with rel:'describedby' and type text/markdown"
+    kinds = ("catalog", "collection")
+
+    def check(self, node: Node, graph: CatalogGraph) -> Iterable[Finding]:
+        yield from _check_markdown_link(self, node, graph, rel="describedby", target="README.md")

@@ -16,7 +16,7 @@ import pytest
 
 from reis.model import Report
 
-PORTOLAN_URI = "https://portolan-sdi.org/portolan/v0.1.0/schema.json"
+PORTOLAN_URI = "https://schema.portolan-sdi.org/v0.1.0/schema.json"
 # multihash: varint(0x12 sha2-256) + varint(0x20) + sha256(b"")
 VALID_MULTIHASH = "1220e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
@@ -108,6 +108,7 @@ class CollectionBuilder:
             {"rel": "root", "href": to_root, "type": "application/json"},
             {"rel": "parent", "href": "../catalog.json", "type": "application/json"},
             {"rel": "agents", "href": "./AGENTS.md", "type": "text/markdown"},
+            {"rel": "describedby", "href": "./README.md", "type": "text/markdown"},
         ]
         for item in self.items:
             links.append(
@@ -198,6 +199,7 @@ class CatalogBuilder:
         links: list[dict[str, Any]] = [
             {"rel": "root", "href": to_root, "type": "application/json"},
             {"rel": "agents", "href": "./AGENTS.md", "type": "text/markdown"},
+            {"rel": "describedby", "href": "./README.md", "type": "text/markdown"},
         ]
         if self.depth:
             links.insert(

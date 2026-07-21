@@ -11,7 +11,7 @@ from reis.rules.assets import (
 )
 from reis.rules.bbox import BboxValidRule
 from reis.rules.conformance import SchemaUriConsistencyRule, SchemaUriDeclaredRule
-from reis.rules.files import AgentsLinkRule, RequiredFilesRule
+from reis.rules.files import AgentsLinkRule, ReadmeLinkRule, RequiredFilesRule
 from reis.rules.license import (
     LicenseDeclaredRule,
     NoProprietaryLicenseRule,
@@ -44,6 +44,7 @@ from reis.rules.viz import (
 DEFAULT_RULES: tuple[Rule, ...] = (
     RequiredFilesRule(),
     AgentsLinkRule(),
+    ReadmeLinkRule(),
     TitleDescriptionRule(),
     HumanReadableTitleRule(),
     LinkTitleRule(),
