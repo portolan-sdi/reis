@@ -43,7 +43,7 @@ def test_config_from_dict(catalog: CatalogBuilder) -> None:
 def test_cli_clean_catalog_exits_zero(catalog: CatalogBuilder) -> None:
     catalog.collection("roads")
     root = catalog.write()
-    result = CliRunner().invoke(main, ["check", str(root)])
+    result = CliRunner().invoke(main, ["check", "--no-structural", str(root)])
     assert result.exit_code == 0
     assert "no findings" in result.output
 
@@ -59,7 +59,7 @@ def test_cli_broken_catalog_exits_one(catalog: CatalogBuilder) -> None:
 def test_cli_json_output(catalog: CatalogBuilder) -> None:
     catalog.collection("roads", license="proprietary")
     root = catalog.write()
-    result = CliRunner().invoke(main, ["check", "--json", str(root)])
+    result = CliRunner().invoke(main, ["check", "--no-structural", "--json", str(root)])
     assert result.exit_code == 1
     payload = json.loads(result.output)
     assert payload["passed"] is False

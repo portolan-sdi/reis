@@ -9,7 +9,9 @@ from reis.catalog import CatalogGraph, Node
 from reis.model import Finding, Severity
 from reis.rule import Rule
 
-SCHEMA_URI_PATTERN = re.compile(r"^https://portolan-sdi\.org/portolan/v\d+\.\d+\.\d+/schema\.json$")
+SCHEMA_URI_PATTERN = re.compile(
+    r"^https://portolan-sdi\.github\.io/portolan-spec/portolan/v\d+\.\d+\.\d+/schema\.json$"
+)
 
 
 def declared_schema_uris(node: Node) -> list[str]:
@@ -34,7 +36,10 @@ class SchemaUriDeclaredRule(Rule):
                 node,
                 "stac_extensions declares no Portolan schema URI",
                 json_pointer="/stac_extensions",
-                fix_hint="add e.g. https://portolan-sdi.org/portolan/v0.1.0/schema.json",
+                fix_hint=(
+                    "add e.g. https://portolan-sdi.github.io/portolan-spec"
+                    "/portolan/v0.1.0/schema.json"
+                ),
             )
         elif len(uris) > 1:
             yield self.finding(

@@ -36,7 +36,10 @@ def test_two_portolan_uris_on_one_object(catalog: CatalogBuilder) -> None:
         root / "catalog.json",
         lambda d: d.__setitem__(
             "stac_extensions",
-            [PORTOLAN_URI, "https://portolan-sdi.org/portolan/v0.2.0/schema.json"],
+            [
+                PORTOLAN_URI,
+                "https://portolan-sdi.github.io/portolan-spec/portolan/v0.2.0/schema.json",
+            ],
         ),
     )
     findings = findings_for(validate(root), "PTL-CNF-001")
@@ -62,7 +65,8 @@ def test_version_mismatch_with_root_is_warning(catalog: CatalogBuilder) -> None:
     mutate_json(
         root / "roads" / "collection.json",
         lambda d: d.__setitem__(
-            "stac_extensions", ["https://portolan-sdi.org/portolan/v0.2.0/schema.json"]
+            "stac_extensions",
+            ["https://portolan-sdi.github.io/portolan-spec/portolan/v0.2.0/schema.json"],
         ),
     )
     report = validate(root)

@@ -10,7 +10,7 @@ readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10"
 authors = [{ name = "Portolan contributors" }]
-dependencies = ["click>=8.1"]
+dependencies = ["click>=8.1", "stac-valid>=4.2"]
 
 [project.urls]
 Homepage = "https://github.com/portolan-sdi/reis"
@@ -59,6 +59,11 @@ strict = true
 python_version = "3.10"
 files = ["src/reis"]
 
+# stac-valid ships no type stubs / py.typed marker.
+[[tool.mypy.overrides]]
+module = "stac_validator.*"
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
@@ -73,6 +78,7 @@ addopts = [
 markers = [
     "unit: fast, isolated tests",
     "integration: end-to-end validation runs",
+    "network: exercises the real stac-validator (needs schemas.stacspec.org)",
 ]
 
 [tool.coverage.report]
@@ -126,6 +132,12 @@ exclude_dirs = ["tests", ".venv"]
 [tool.deptry]
 known_first_party = ["reis"]
 exclude = [".venv", "tests", "mutants"]
+
+# stac-valid (the maintained successor to the deprecated stac-validator
+# distribution) ships the module as `stac_validator`; map it so deptry does
+# not read the import as a missing dependency.
+[tool.deptry.package_module_name_map]
+stac-valid = ["stac_validator"]
 
 [tool.mutmut]
 source_paths = ["src/reis/"]

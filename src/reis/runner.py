@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
+from typing import Any
 
 from reis.catalog import ROOT_CATALOG, CatalogGraph
 from reis.config import RulesConfig
 from reis.model import Finding, Report, Severity
 from reis.rule import Rule
+from reis.structural import STR_INVALID, validate_structural
 
 GEN_MISSING_ROOT = "PTL-GEN-000"
 GEN_UNPARSEABLE = "PTL-GEN-001"
@@ -19,8 +21,19 @@ def validate(
     catalog_path: Path | str,
     rules: Sequence[Rule] | None = None,
     config: RulesConfig | None = None,
+    *,
+    structural: bool = False,
+    structural_validator: Callable[[dict[str, Any]], list[str]] | None = None,
 ) -> Report:
-    """Run the Portolan metadata validation pass over a local catalog tree."""
+    """Validate a local Portolan catalog tree.
+
+    The metadata pass always runs. When ``structural`` is true the STAC 1.1.0
+    structural pass runs too, delegated to stac-validator (see
+    :mod:`reis.structural`); it is off by default here because it reaches the
+    network, and on by default in the CLI. Disabling ``PTL-STR-001`` via
+    ``config`` skips the structural pass. ``structural_validator`` injects an
+    alternate validator, chiefly for offline testing.
+    """
     if rules is None:
         from reis.rules import DEFAULT_RULES
 
@@ -83,6 +96,9 @@ def validate(
             if node.parse_error is not None:
                 continue
             findings.extend(rule.check(node, graph))
+
+    if structural and STR_INVALID not in config.disabled:
+        findings.extend(validate_structural(graph, structural_validator))
 
     if config.severity_overrides:
         findings = [

@@ -14,5 +14,13 @@ from __future__ import annotations
 from reis.config import RulesConfig
 from reis.model import Finding, Report, Severity
 from reis.runner import validate
+from reis.structural import validate_structural
 
-__all__ = ["Finding", "Report", "RulesConfig", "Severity", "validate"]
+__all__ = [
+    "Finding",
+    "Report",
+    "RulesConfig",
+    "Severity",
+    "validate",
+    "validate_structural",
+]
