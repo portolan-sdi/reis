@@ -2,21 +2,24 @@
 
 A validator and linter for [Portolan](https://www.portolan-sdi.org/) catalogs. Named after [Piri Reis](https://www.unesco.org/en/memory-world/piri-reis-world-map-1513).
 
-Portolan conformance is defined by passing this validator. reis implements three of the spec's separable passes:
+Portolan conformance is defined by passing this validator. reis implements four of the spec's separable passes:
 
 - the **metadata pass** — every requirement in the [Portolan spec](https://github.com/portolan-sdi/portolan-spec) checkable from the catalog's JSON metadata alone, without reading asset bytes;
 - the **structural pass** — STAC 1.1.0 core validity, delegated to [`stac-validator`](https://github.com/stac-utils/stac-validator) (the maintained `stac-valid` distribution). This validates each object against the STAC 1.1.0 *core* schema only; the extensions an object declares — including the Portolan profile — are the metadata pass's domain, so a not-yet-published extension schema never breaks it.
 - the **schema pass** — the published [Portolan profile schema](https://schema.portolan-sdi.org/v0.1.0/schema.json) applied directly to every object, which the spec calls the machine-checkable core of the metadata pass. reis implements those requirements by hand (for precise messages and fix hints), so this pass overlaps them by design: it is an authoritative cross-check that catches drift or gaps between the hand rules and the canonical schema. It is therefore **opt-in** (`--schema`), and a defect both catch is reported twice — once by a metadata rule, once by the schema.
+- the **data pass** — reads each asset's bytes, local files and remote `https` URLs alike, and checks them against the declared metadata: the `file:checksum` and `file:size` MUSTs recomputed from the bytes, the media type confirmed by magic number, a declared cloud-optimized COG confirmed to be one, and the data's own bbox/CRS checked against the object's. It is **opt-in** (`--data`) because it reaches the network and needs the geospatial stack in the `reis[data]` extra; without that extra it emits one `PTL-DAT-000` warning and moves on.
 
 Not covered here (separate passes):
 
-- the data pass (GeoParquet spatial ordering and row-group statistics, embedded COG statistics)
+- deeper data checks (GeoParquet spatial ordering and row-group statistics, embedded COG overview statistics)
 - live-hosting checks (CORS, HTTP range requests)
 
 ## Install
 
 ```bash
 uv tool install reis
+# with the data pass (pyarrow, rasterio, rio-cogeo, pyproj):
+uv tool install "reis[data]"
 ```
 
 ## CLI
@@ -26,6 +29,7 @@ reis check path/to/catalog
 reis check --json path/to/catalog
 reis check --no-structural path/to/catalog
 reis check --schema path/to/catalog
+reis check --data path/to/catalog
 ```
 
 Exit code 0 when the catalog passes (no errors; warnings and infos allowed), 1 when errors were found.
@@ -33,6 +37,8 @@ Exit code 0 when the catalog passes (no errors; warnings and infos allowed), 1 w
 `reis check` runs the metadata and structural passes by default. The structural pass fetches the STAC core schemas from `schemas.stacspec.org` (cached in-process); when it cannot reach them it emits a single `PTL-STR-000` warning rather than failing, so the offline metadata findings still surface. Pass `--no-structural` to skip it and run the metadata pass alone.
 
 `--schema` additionally runs the schema pass, fetching the Portolan profile schema from the URI the root catalog declares (falling back to `schema.portolan-sdi.org`) and validating every object against it. Like the structural pass it degrades to a single `PTL-SCH-000` warning when the schema is unreachable. It is off by default because it overlaps the metadata pass; turn it on to cross-check reis's hand rules against the canonical schema.
+
+`--data` additionally runs the data pass, reading each asset's bytes to verify the declared `file:checksum`, `file:size`, media type, COG cloud-optimization, and bbox/CRS. Relative hrefs resolve against the catalog tree; absolute `https` hrefs are fetched (checksum over a whole-object read, headers over range requests). It needs the `reis[data]` extra and degrades to a single `PTL-DAT-000` warning when the extra is absent; assets it cannot reach (`s3`, a missing local file) are skipped rather than failed.
 
 ## Library
 
@@ -46,10 +52,10 @@ for finding in report.findings:
           finding.path, finding.message)
 ```
 
-`validate` runs the metadata pass only. Add `structural=True` to also run the STAC structural pass, or `schema=True` to run the Portolan profile schema pass (both reach the network); the CLI turns `structural` on by default:
+`validate` runs the metadata pass only. Add `structural=True` to also run the STAC structural pass, `schema=True` for the Portolan profile schema pass, or `data=True` for the data pass (all reach the network; `data=True` also needs the `reis[data]` extra). The CLI turns `structural` on by default:
 
 ```python
-report = validate("path/to/catalog", structural=True, schema=True)
+report = validate("path/to/catalog", structural=True, schema=True, data=True)
 ```
 
 Rules can be disabled or re-severitied:
@@ -89,8 +95,9 @@ Findings carry a stable rule id (`PTL-<GROUP>-<NNN>`), a severity, a message, an
 | `PTL-PRO` | 001–004 | mirror `via`/`canonical` links and `updated` sync time; officials carry no upstream links |
 | `PTL-VIZ` | 001–004 | thumbnail on geospatial collections, style assets for visual derivatives, PMTiles `rel:"pmtiles"` registration, large-vector-without-visual nudge |
 | `PTL-STR` | 000–001 | STAC 1.1.0 core structural validity (`stac-validator`); `000` warns when the pass could not run |
+| `PTL-DAT` | 000–005 | asset bytes vs metadata: `file:checksum`, `file:size`, format magic, COG cloud-optimization, bbox/CRS; `000` warns when the `reis[data]` extra is absent |
 
-Validation is local-directory only for now. `CatalogGraph` (`src/reis/catalog.py`) is the single I/O layer, loaded in one pass, so a remote (HTTP) loader can slot in later.
+The catalog tree is loaded from a local directory. `CatalogGraph` (`src/reis/catalog.py`) is the single I/O layer for the metadata, loaded in one pass, so a remote (HTTP) catalog loader can slot in later; the data pass already reads asset bytes over `https`.
 
 ## Development
 
