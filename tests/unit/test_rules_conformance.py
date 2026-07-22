@@ -38,7 +38,7 @@ def test_two_portolan_uris_on_one_object(catalog: CatalogBuilder) -> None:
             "stac_extensions",
             [
                 PORTOLAN_URI,
-                "https://schema.portolan-sdi.org/v0.2.0/schema.json",
+                "https://schemas.portolan-sdi.org/portolan/v0.2.0/schema.json",
             ],
         ),
     )
@@ -66,7 +66,7 @@ def test_version_mismatch_with_root_is_warning(catalog: CatalogBuilder) -> None:
         root / "roads" / "collection.json",
         lambda d: d.__setitem__(
             "stac_extensions",
-            ["https://schema.portolan-sdi.org/v0.2.0/schema.json"],
+            ["https://schemas.portolan-sdi.org/portolan/v0.2.0/schema.json"],
         ),
     )
     report = validate(root)

@@ -37,7 +37,7 @@ SCH_INVALID = "PTL-SCH-001"
 SCH_UNAVAILABLE = "PTL-SCH-000"
 
 # The pinned v0.1 profile schema, used when the root declares no single URI.
-DEFAULT_SCHEMA_URI = "https://schema.portolan-sdi.org/v0.1.0/schema.json"
+DEFAULT_SCHEMA_URI = "https://schemas.portolan-sdi.org/portolan/v0.1.0/schema.json"
 
 # A validator maps one object's raw JSON to a list of schema-error messages;
 # an empty list means the object satisfies the Portolan profile schema.
@@ -94,17 +94,19 @@ def _fetch_schema(schema_uri: str) -> dict[str, Any]:
     return schema
 
 
-def default_validator(schema_uri: str = DEFAULT_SCHEMA_URI) -> Validator:
-    """Build the ``jsonschema``-backed Portolan profile validator.
+def validator_from_schema(schema: dict[str, Any]) -> Validator:
+    """Build the ``jsonschema``-backed Portolan profile validator from a schema.
 
-    Imported lazily: the metadata pass never needs ``jsonschema``, and the first
-    use fetches the profile schema over the network. Draft-07 is pinned because
-    the published Portolan schema declares ``$schema`` draft-07.
+    Split from :func:`default_validator` so the schema can come from disk — the
+    hermetic tests validate the vendored reference catalog against the vendored
+    profile schema with no network. ``jsonschema`` is imported lazily because the
+    metadata pass never needs it. Draft-07 is pinned because the published
+    Portolan schema declares ``$schema`` draft-07.
     """
     from jsonschema import Draft7Validator
     from jsonschema.exceptions import best_match
 
-    validator = Draft7Validator(_fetch_schema(schema_uri))
+    validator = Draft7Validator(schema)
 
     def _describe(error: Any) -> str:
         # The profile schema is a top-level oneOf discriminated by `type`
@@ -126,6 +128,16 @@ def default_validator(schema_uri: str = DEFAULT_SCHEMA_URI) -> Validator:
         return [_describe(error) for error in sorted(validator.iter_errors(data), key=str)]
 
     return _validate
+
+
+def default_validator(schema_uri: str = DEFAULT_SCHEMA_URI) -> Validator:
+    """Build the profile validator by fetching the schema over the network.
+
+    The first use fetches the profile schema from ``schema_uri`` (the URI the
+    root catalog declares, or the pinned default). Offline callers should build
+    a validator with :func:`validator_from_schema` from a local schema instead.
+    """
+    return validator_from_schema(_fetch_schema(schema_uri))
 
 
 def validate_schema(
