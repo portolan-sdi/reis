@@ -92,7 +92,9 @@ jobs:
       - name: Install dependencies
         run: |
           uv python install ${{ matrix.python-version }}
-          uv sync
+          # The data pass tests need the reis[data] extra; without it the data
+          # checks skip and the coverage gate (checks.py) fails.
+          uv sync --extra data
 
       - name: Run tests
         run: uv run pytest -n auto --cov --cov-report=xml
