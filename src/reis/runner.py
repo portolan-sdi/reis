@@ -12,8 +12,13 @@ from reis.config import RulesConfig
 from reis.data import (
     DAT_CHECKSUM,
     DAT_COG,
+    DAT_COG_STATS,
     DAT_CONSISTENCY,
     DAT_FORMAT,
+    DAT_GEOPARQUET,
+    DAT_ORDERING,
+    DAT_ROWGROUP_SIZE,
+    DAT_ROWGROUP_STATS,
     DAT_SIZE,
     validate_data,
 )
@@ -28,7 +33,20 @@ GEN_UNPARSEABLE = "PTL-GEN-001"
 
 # Every rule the data pass can raise; disabling all of them skips the (networked)
 # pass entirely, while disabling any subset just silences those findings.
-_DATA_RULE_IDS = frozenset({DAT_CHECKSUM, DAT_SIZE, DAT_FORMAT, DAT_COG, DAT_CONSISTENCY})
+_DATA_RULE_IDS = frozenset(
+    {
+        DAT_CHECKSUM,
+        DAT_SIZE,
+        DAT_FORMAT,
+        DAT_COG,
+        DAT_CONSISTENCY,
+        DAT_ORDERING,
+        DAT_ROWGROUP_STATS,
+        DAT_ROWGROUP_SIZE,
+        DAT_COG_STATS,
+        DAT_GEOPARQUET,
+    }
+)
 
 _Validator = Callable[[dict[str, Any]], list[str]]
 
