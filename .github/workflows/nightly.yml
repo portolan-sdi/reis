@@ -24,7 +24,8 @@ jobs:
       - name: Install dependencies
         run: |
           uv python install 3.13
-          uv sync
+          # Include the data extra so mutmut can exercise the data pass tests.
+          uv sync --extra data
 
       - name: Run mutation testing
         run: uv run mutmut run

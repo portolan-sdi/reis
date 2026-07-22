@@ -44,11 +44,17 @@ def main() -> None:
     default=False,
     help="Also validate against the published Portolan profile schema (needs network).",
 )
-def check(catalog_path: Path, as_json: bool, structural: bool, schema: bool) -> None:
+@click.option(
+    "--data/--no-data",
+    "data",
+    default=False,
+    help="Also verify asset bytes: checksum, size, format, extent (needs reis[data], network).",
+)
+def check(catalog_path: Path, as_json: bool, structural: bool, schema: bool, data: bool) -> None:
     """Validate CATALOG_PATH: the Portolan metadata pass, the STAC 1.1.0
-    structural pass (unless --no-structural), and — with --schema — the
-    published Portolan profile schema."""
-    report = validate(catalog_path, structural=structural, schema=schema)
+    structural pass (unless --no-structural), and — with --schema / --data — the
+    published Portolan profile schema and the asset bytes."""
+    report = validate(catalog_path, structural=structural, schema=schema, data=data)
     if as_json:
         click.echo(json_module.dumps(report.to_dict(), indent=2))
     else:

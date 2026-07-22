@@ -1,0 +1,131 @@
+"""Data pass: verify asset bytes against what the metadata declares.
+
+The metadata pass checks that assets *declare* the required fields — an
+``href``, a media ``type``, a positive ``file:size``, a well-formed
+``file:checksum`` (``PTL-AST-001..004``). None of that opens the asset, so a
+catalog can declare a checksum, size, format, or extent that its actual bytes
+contradict and still pass. core.md makes several of these a hard MUST:
+``file:checksum``/``file:size`` "MUST be regenerated at publish time … so they
+always match what is in the bucket", and each format carries a required media
+type.
+
+This opt-in pass reads the bytes — local files and remote ``https`` assets — and
+reports where they diverge from the claim. Like the structural and schema passes
+it is off by default (CLI ``--data``; ``validate(..., data=True)``), reaches the
+network, and downgrades to a single WARNING when it cannot run.
+
+The heavy geospatial dependencies (``pyarrow``, ``rasterio``, ``rio-cogeo``,
+``pyproj``, ``pmtiles``) live behind the ``reis[data]`` extra and are imported
+lazily by :func:`default_validator`, so the core package stays stdlib-only and a
+catalog with no data pass installs nothing new.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from dataclasses import dataclass
+
+from reis.catalog import CatalogGraph, Kind, Node
+from reis.data.reader import AssetReader, FilesystemHttpReader
+from reis.model import Finding, Severity
+
+DAT_UNAVAILABLE = "PTL-DAT-000"
+DAT_CHECKSUM = "PTL-DAT-001"
+DAT_SIZE = "PTL-DAT-002"
+DAT_FORMAT = "PTL-DAT-003"
+DAT_COG = "PTL-DAT-004"
+DAT_CONSISTENCY = "PTL-DAT-005"
+
+# Assets are declared on collections and items; catalogs carry none.
+_DATA_KINDS: tuple[Kind, ...] = ("collection", "item")
+
+
+@dataclass(frozen=True)
+class DataDefect:
+    """One byte-vs-metadata mismatch for a single asset.
+
+    A lightweight seed that :func:`validate_data` turns into a :class:`Finding`,
+    filling in the object's path and id. ``asset_key`` and ``field`` locate the
+    asset within the object (``/assets/<key>[/<field>]``).
+    """
+
+    rule_id: str
+    severity: Severity
+    message: str
+    asset_key: str
+    field: str | None = None
+
+
+# A validator inspects one object's assets, given a reader for their bytes, and
+# returns the mismatches it found; an empty list means every asset matched.
+Validator = Callable[[Node, AssetReader], list[DataDefect]]
+
+
+def default_validator() -> Validator:
+    """Build the byte-verifying validator, importing the geospatial deps lazily.
+
+    The metadata pass never needs these packages; importing :mod:`reis.data.checks`
+    pulls ``pyarrow``/``rasterio``/``pyproj``/``pmtiles``/``rio_cogeo``. A missing
+    extra surfaces here as ``ImportError`` and is downgraded to one WARNING.
+    """
+    from reis.data import checks
+
+    return checks.check_node
+
+
+def validate_data(graph: CatalogGraph, validator: Validator | None = None) -> list[Finding]:
+    """Verify every asset's bytes against its declared metadata.
+
+    Returns ``PTL-DAT-00x`` findings for each mismatch. If the validator is
+    unavailable (the ``reis[data]`` extra is not installed) or a call fails
+    systemically, returns a single ``PTL-DAT-000`` warning instead of failing the
+    run — a systemic failure is reported once, not once per object.
+    """
+    if validator is None:
+        try:
+            validator = default_validator()
+        except ImportError:
+            return [
+                Finding(
+                    rule_id=DAT_UNAVAILABLE,
+                    severity=Severity.WARNING,
+                    message=(
+                        "data validation skipped: the 'reis[data]' extra is not installed "
+                        "(needs pyarrow, rasterio, rio-cogeo, pyproj, pmtiles)"
+                    ),
+                    path=".",
+                )
+            ]
+
+    reader = FilesystemHttpReader(graph)
+    findings: list[Finding] = []
+    for node in graph.iter(*_DATA_KINDS):
+        if node.parse_error is not None:
+            continue
+        try:
+            defects = validator(node, reader)
+        except Exception as exc:  # noqa: BLE001 - any validator failure is systemic
+            findings.append(
+                Finding(
+                    rule_id=DAT_UNAVAILABLE,
+                    severity=Severity.WARNING,
+                    message=f"data validation could not run: {exc}",
+                    path=".",
+                )
+            )
+            return findings
+        for defect in defects:
+            pointer = f"/assets/{defect.asset_key}"
+            if defect.field is not None:
+                pointer = f"{pointer}/{defect.field}"
+            findings.append(
+                Finding(
+                    rule_id=defect.rule_id,
+                    severity=defect.severity,
+                    message=defect.message,
+                    path=str(node.path),
+                    object_id=node.id,
+                    json_pointer=pointer,
+                )
+            )
+    return findings

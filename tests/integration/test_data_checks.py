@@ -1,0 +1,274 @@
+"""Byte-check logic — fake readers with in-memory bytes, no network.
+
+Needs the ``reis[data]`` extra (importing :mod:`reis.data.checks` pulls the
+geospatial stack), so it lives under integration and skips when the extra is
+absent. Covers the checksum, size, and format checks with synthetic bytes plus
+the PMTiles header parse and the reprojection helper; the parquet-geo and COG
+checks are exercised end-to-end in ``test_data_catalog``.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import struct
+from collections.abc import Iterator
+from pathlib import Path, PurePosixPath
+
+import pytest
+
+pytest.importorskip("pyarrow")
+pytest.importorskip("pyproj")
+
+import pyarrow as pa  # noqa: E402
+import pyarrow.parquet as pq  # noqa: E402
+from pyproj import CRS, Transformer  # noqa: E402
+
+import reis.data.checks as checks  # noqa: E402
+from reis.catalog import Node  # noqa: E402
+from reis.data import (  # noqa: E402
+    DAT_CHECKSUM,
+    DAT_FORMAT,
+    DAT_SIZE,
+)
+from reis.data.reader import Locator  # noqa: E402
+from reis.model import Severity  # noqa: E402
+
+pytestmark = pytest.mark.integration
+
+_PARQUET = "application/vnd.apache.parquet"
+
+
+def _multihash(payload: bytes, code: str = "12") -> str:
+    return code + "20" + hashlib.sha256(payload).hexdigest()
+
+
+class _FakeReader:
+    """Serves canned bytes for one href; locates nothing (skips geo/COG)."""
+
+    def __init__(self, href: str, payload: bytes) -> None:
+        self._href = href
+        self._payload = payload
+
+    def stream(self, node: Node, href: str) -> Iterator[bytes] | None:
+        return iter([self._payload]) if href == self._href else None
+
+    def locate(self, node: Node, href: str) -> Locator | None:
+        return None
+
+
+def _item(asset: dict[str, object]) -> Node:
+    return Node(
+        path=PurePosixPath("roads/seg1/seg1.json"),
+        abs_path=Path("/nowhere/seg1.json"),
+        kind="item",
+        id="seg1",
+        data={"type": "Feature", "bbox": [4.0, 50.0, 6.0, 52.0], "assets": {"data": asset}},
+    )
+
+
+def _run(payload: bytes, asset: dict[str, object]) -> list:
+    node = _item(asset)
+    return checks.check_node(node, _FakeReader("./data.parquet", payload))
+
+
+def _asset(**over: object) -> dict[str, object]:
+    base: dict[str, object] = {
+        "href": "./data.parquet",
+        "type": _PARQUET,
+        "roles": ["data"],
+    }
+    base.update(over)
+    return base
+
+
+def test_matching_bytes_are_clean() -> None:
+    payload = b"PAR1" + b"\x00" * 100 + b"PAR1"
+    asset = _asset(**{"file:size": len(payload), "file:checksum": _multihash(payload)})
+    assert _run(payload, asset) == []
+
+
+def test_checksum_mismatch_is_error() -> None:
+    payload = b"PAR1data"
+    asset = _asset(**{"file:size": len(payload), "file:checksum": _multihash(b"different")})
+    defects = _run(payload, asset)
+    assert [d.rule_id for d in defects] == [DAT_CHECKSUM]
+    assert defects[0].severity is Severity.ERROR
+    assert defects[0].field == "file:checksum"
+
+
+def test_size_mismatch_is_error() -> None:
+    payload = b"PAR1data"
+    asset = _asset(**{"file:size": 999, "file:checksum": _multihash(payload)})
+    defects = _run(payload, asset)
+    assert [d.rule_id for d in defects] == [DAT_SIZE]
+    assert "999" in defects[0].message
+
+
+def test_format_mismatch_is_error() -> None:
+    payload = b"PAR1data"  # real parquet magic
+    asset = _asset(type="application/vnd.pmtiles", **{"file:size": len(payload)})
+    defects = _run(payload, asset)
+    assert [d.rule_id for d in defects] == [DAT_FORMAT]
+    assert "pmtiles" in defects[0].message and "parquet" in defects[0].message
+
+
+def test_unsupported_hash_is_info_not_error() -> None:
+    payload = b"PAR1data"
+    # 0x18 = keccak-256, valid multihash code reis cannot compute.
+    digest = "00" * 32
+    asset = _asset(**{"file:size": len(payload), "file:checksum": "1820" + digest})
+    defects = _run(payload, asset)
+    assert [d.rule_id for d in defects] == [DAT_CHECKSUM]
+    assert defects[0].severity is Severity.INFO
+
+
+def test_unreadable_stream_is_info() -> None:
+    class _ExplodingStream:
+        def __iter__(self) -> _ExplodingStream:
+            return self
+
+        def __next__(self) -> bytes:
+            raise OSError("connection reset")
+
+    class _Boom:
+        def stream(self, node: Node, href: str) -> Iterator[bytes]:
+            return _ExplodingStream()
+
+        def locate(self, node: Node, href: str) -> Locator | None:
+            return None
+
+    defects = checks.check_node(_item(_asset()), _Boom())
+    assert [d.rule_id for d in defects] == [DAT_CHECKSUM]
+    assert defects[0].severity is Severity.INFO
+
+
+def test_absent_checksum_and_size_are_skipped() -> None:
+    payload = b"PAR1data"
+    defects = _run(payload, _asset())  # no file:size / file:checksum
+    assert defects == []  # PTL-AST-003 owns absence; the data pass stays silent
+
+
+def test_pmtiles_header_bbox(tmp_path: Path) -> None:
+    header = bytearray(127)
+    header[0:7] = b"PMTiles"
+    header[7] = 3
+    struct.pack_into("<iiii", header, 102, int(4.0e7), int(50.0e7), int(6.0e7), int(52.0e7))
+    path = tmp_path / "tiles.pmtiles"
+    path.write_bytes(bytes(header))
+
+    geo = checks._geo_from_pmtiles(Locator(is_remote=False, source=str(path)))
+
+    assert geo is not None
+    assert geo.epsg == 4326
+    assert geo.bbox == pytest.approx([4.0, 50.0, 6.0, 52.0])
+
+
+def test_to_wgs84_reprojects_projected_bbox() -> None:
+    to_mercator = Transformer.from_crs(CRS.from_epsg(4326), CRS.from_epsg(3857), always_xy=True)
+    minx, miny = to_mercator.transform(4.0, 50.0)
+    maxx, maxy = to_mercator.transform(6.0, 52.0)
+    geo = checks._Geo(bbox=[minx, miny, maxx, maxy], epsg=3857, crs=CRS.from_epsg(3857))
+
+    result = checks._to_wgs84(geo)
+
+    assert result is not None
+    assert result == pytest.approx([4.0, 50.0, 6.0, 52.0], abs=1e-6)
+
+
+def test_bbox_close_tolerance() -> None:
+    assert checks._bbox_close([4.0, 50.0, 6.0, 52.0], [4.005, 50.0, 6.0, 52.0])
+    assert not checks._bbox_close([4.0, 50.0, 6.0, 52.0], [4.5, 50.0, 6.0, 52.0])
+
+
+@pytest.mark.parametrize(
+    "head,expected",
+    [
+        (b"\x89PNG\r\n\x1a\n", "png"),
+        (b"\xff\xd8\xff\xe0", "jpeg"),
+        (b"MM\x00*rest", "tiff"),
+        (b"nothing", None),
+    ],
+)
+def test_detect_format_variants(head: bytes, expected: str | None) -> None:
+    assert checks._detect_format(head) == expected
+
+
+@pytest.mark.parametrize(
+    "media,expected",
+    [
+        ("image/png", "png"),
+        ("image/jpeg", "jpeg"),
+        ("image/tiff; application=geotiff", "tiff"),
+        ("application/vnd.pmtiles", "pmtiles"),
+        ("application/json", None),
+    ],
+)
+def test_expected_format_variants(media: str, expected: str | None) -> None:
+    assert checks._expected_format(media) == expected
+
+
+def test_is_cloud_optimized_non_string() -> None:
+    assert checks._is_cloud_optimized(None) is False
+
+
+@pytest.mark.parametrize(
+    "raw,out",
+    [
+        ([1.0, 2.0, 3.0, 4.0], [1.0, 2.0, 3.0, 4.0]),
+        ([1.0, 2.0, 9.0, 3.0, 4.0, 9.0], [1.0, 2.0, 3.0, 4.0]),  # drop z
+        ([1.0, 2.0], None),
+        (["x", "y", "z", "w"], None),
+        ("nope", None),
+    ],
+)
+def test_as_bbox(raw: object, out: list[float] | None) -> None:
+    assert checks._as_bbox(raw) == out
+
+
+def test_declared_bbox_collection_extent() -> None:
+    node = Node(
+        path=PurePosixPath("c/collection.json"),
+        abs_path=Path("/x"),
+        kind="collection",
+        id="c",
+        data={"extent": {"spatial": {"bbox": [[4.0, 50.0, 6.0, 52.0]]}}},
+    )
+    assert checks._declared_bbox(node) == [4.0, 50.0, 6.0, 52.0]
+
+
+def test_declared_epsg_from_properties() -> None:
+    node = Node(
+        path=PurePosixPath("c/i/i.json"),
+        abs_path=Path("/x"),
+        kind="item",
+        id="i",
+        data={"properties": {"proj:epsg": 3857}},
+    )
+    assert checks._declared_epsg(node, {}) == 3857
+    assert checks._declared_epsg(node, {"proj:epsg": 32631}) == 32631  # asset wins
+
+
+def test_declared_epsg_absent() -> None:
+    node = Node(path=PurePosixPath("c/i/i.json"), abs_path=Path("/x"), kind="item", id="i", data={})
+    assert checks._declared_epsg(node, {}) is None
+
+
+def test_check_cog_reader_error_is_info() -> None:
+    located = Locator(is_remote=False, source="/no/such/file.tif")
+    defects = checks._check_cog("data", located)
+    assert [d.rule_id for d in defects] == [checks.DAT_COG]
+    assert defects[0].severity is Severity.INFO
+
+
+def test_geo_from_parquet_without_geo_metadata(tmp_path: Path) -> None:
+    path = tmp_path / "plain.parquet"
+    pq.write_table(pa.table({"value": [1, 2, 3]}), path)
+    assert checks._geo_from_parquet(Locator(is_remote=False, source=str(path))) is None
+
+
+def test_consistency_unreadable_is_info() -> None:
+    node = _item(_asset())
+    located = Locator(is_remote=False, source="/no/such/file.parquet")
+    defects = checks._check_consistency(node, "data", _asset(), "parquet", located)
+    assert [d.rule_id for d in defects] == [checks.DAT_CONSISTENCY]
+    assert defects[0].severity is Severity.INFO
