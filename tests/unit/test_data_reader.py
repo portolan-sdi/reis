@@ -35,7 +35,7 @@ def test_locate_local_existing_file(catalog: CatalogBuilder) -> None:
 
     located = FilesystemHttpReader(graph).locate(item, "./data.parquet")
 
-    assert located == Locator(is_remote=False, path=asset)
+    assert located == Locator(is_remote=False, source=str(asset))
     assert located.gdal_path() == str(asset)
 
 
@@ -50,7 +50,7 @@ def test_locate_https_is_remote(catalog: CatalogBuilder) -> None:
 
     located = FilesystemHttpReader(graph).locate(item, url)
 
-    assert located == Locator(is_remote=True, url=url)
+    assert located == Locator(is_remote=True, source=url)
     assert located.gdal_path() == f"/vsicurl/{url}"
 
 
@@ -177,6 +177,6 @@ def test_non_https_refused(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_local_open_binary_roundtrip(tmp_path: Path) -> None:
     path = tmp_path / "a.bin"
     path.write_bytes(b"hello")
-    located = Locator(is_remote=False, path=path)
+    located = Locator(is_remote=False, source=str(path))
     with located.open_binary() as handle:
         assert handle.read() == b"hello"

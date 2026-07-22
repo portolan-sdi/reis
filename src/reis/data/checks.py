@@ -346,7 +346,7 @@ def _extract_geo(expected: str, located: Locator) -> _Geo | None:
 
 
 def _geo_from_parquet(located: Locator) -> _Geo | None:
-    source: Any = located.path if not located.is_remote else located.open_binary()
+    source: Any = located.open_binary() if located.is_remote else located.source
     parquet = pq.ParquetFile(source)
     raw = (parquet.schema_arrow.metadata or {}).get(b"geo")
     if raw is None:

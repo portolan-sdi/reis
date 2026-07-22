@@ -156,7 +156,7 @@ def test_pmtiles_header_bbox(tmp_path: Path) -> None:
     path = tmp_path / "tiles.pmtiles"
     path.write_bytes(bytes(header))
 
-    geo = checks._geo_from_pmtiles(Locator(is_remote=False, path=path))
+    geo = checks._geo_from_pmtiles(Locator(is_remote=False, source=str(path)))
 
     assert geo is not None
     assert geo.epsg == 4326
@@ -254,7 +254,7 @@ def test_declared_epsg_absent() -> None:
 
 
 def test_check_cog_reader_error_is_info() -> None:
-    located = Locator(is_remote=False, path=Path("/no/such/file.tif"))
+    located = Locator(is_remote=False, source="/no/such/file.tif")
     defects = checks._check_cog("data", located)
     assert [d.rule_id for d in defects] == [checks.DAT_COG]
     assert defects[0].severity is Severity.INFO
@@ -263,12 +263,12 @@ def test_check_cog_reader_error_is_info() -> None:
 def test_geo_from_parquet_without_geo_metadata(tmp_path: Path) -> None:
     path = tmp_path / "plain.parquet"
     pq.write_table(pa.table({"value": [1, 2, 3]}), path)
-    assert checks._geo_from_parquet(Locator(is_remote=False, path=path)) is None
+    assert checks._geo_from_parquet(Locator(is_remote=False, source=str(path))) is None
 
 
 def test_consistency_unreadable_is_info() -> None:
     node = _item(_asset())
-    located = Locator(is_remote=False, path=Path("/no/such/file.parquet"))
+    located = Locator(is_remote=False, source="/no/such/file.parquet")
     defects = checks._check_consistency(node, "data", _asset(), "parquet", located)
     assert [d.rule_id for d in defects] == [checks.DAT_CONSISTENCY]
     assert defects[0].severity is Severity.INFO

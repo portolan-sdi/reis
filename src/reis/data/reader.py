@@ -31,26 +31,20 @@ _TIMEOUT = 30  # seconds per request
 
 @dataclass(frozen=True)
 class Locator:
-    """Where an asset's bytes live, and how to open them for random access."""
+    """Where an asset's bytes live: a local path string, or an ``https`` URL."""
 
     is_remote: bool
-    path: Path | None = None
-    url: str | None = None
+    source: str
 
     def gdal_path(self) -> str:
         """The path GDAL/rasterio opens: a local path, or a ``/vsicurl/`` URL."""
-        if self.is_remote:
-            return f"/vsicurl/{self.url}"
-        assert self.path is not None
-        return str(self.path)
+        return f"/vsicurl/{self.source}" if self.is_remote else self.source
 
     def open_binary(self) -> io.IOBase:
         """A seekable binary handle: a local file, or an HTTP-range reader."""
         if self.is_remote:
-            assert self.url is not None
-            return _HttpRangeFile(self.url)
-        assert self.path is not None
-        return self.path.open("rb")
+            return _HttpRangeFile(self.source)
+        return Path(self.source).open("rb")
 
 
 class AssetReader(Protocol):
@@ -74,7 +68,7 @@ class FilesystemHttpReader:
             return None
         if is_absolute_href(href):
             if urlparse(href).scheme.lower() == "https":
-                return Locator(is_remote=True, url=href)
+                return Locator(is_remote=True, source=href)
             return None  # s3/http/file: not browser-fetchable; PTL-AST-002 covers it
         rel = self._graph.resolve_path(node, href)
         if rel is None:
@@ -82,17 +76,15 @@ class FilesystemHttpReader:
         path = self._graph.root_path / Path(*rel.parts)
         if not path.is_file():
             return None
-        return Locator(is_remote=False, path=path)
+        return Locator(is_remote=False, source=str(path))
 
     def stream(self, node: Node, href: str) -> Iterator[bytes] | None:
         located = self.locate(node, href)
         if located is None:
             return None
         if located.is_remote:
-            assert located.url is not None
-            return _http_stream(located.url)
-        assert located.path is not None
-        return _file_stream(located.path)
+            return _http_stream(located.source)
+        return _file_stream(Path(located.source))
 
 
 def _file_stream(path: Path) -> Iterator[bytes]:
@@ -103,8 +95,8 @@ def _file_stream(path: Path) -> Iterator[bytes]:
 
 def _http_stream(url: str) -> Iterator[bytes]:
     _require_https(url)
-    request = Request(url, method="GET")  # noqa: S310 - scheme checked above
-    with urlopen(request, timeout=_TIMEOUT) as response:  # noqa: S310
+    request = Request(url, method="GET")
+    with urlopen(request, timeout=_TIMEOUT) as response:  # noqa: S310  # nosec B310
         while chunk := response.read(_CHUNK):
             yield chunk
 
@@ -131,8 +123,8 @@ class _HttpRangeFile(io.RawIOBase):
         self._size = self._head_length()
 
     def _head_length(self) -> int:
-        request = Request(self._url, method="HEAD")  # noqa: S310 - https checked in __init__
-        with urlopen(request, timeout=_TIMEOUT) as response:  # noqa: S310
+        request = Request(self._url, method="HEAD")
+        with urlopen(request, timeout=_TIMEOUT) as response:  # noqa: S310  # nosec B310
             length = response.headers.get("Content-Length")
         if length is None:
             raise OSError(f"HEAD {self._url!r} returned no Content-Length")
@@ -163,12 +155,12 @@ class _HttpRangeFile(io.RawIOBase):
             return 0
         want = len(buffer)
         end = min(self._pos + want, self._size) - 1  # inclusive
-        request = Request(  # noqa: S310 - https checked in __init__
+        request = Request(
             self._url,
             method="GET",
             headers={"Range": f"bytes={self._pos}-{end}"},
         )
-        with urlopen(request, timeout=_TIMEOUT) as response:  # noqa: S310
+        with urlopen(request, timeout=_TIMEOUT) as response:  # noqa: S310  # nosec B310
             data = response.read()
             if response.status == 200:  # server ignored Range; slice ourselves
                 data = data[self._pos : end + 1]
