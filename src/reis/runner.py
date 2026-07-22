@@ -9,6 +9,15 @@ from typing import Any
 
 from reis.catalog import ROOT_CATALOG, CatalogGraph
 from reis.config import RulesConfig
+from reis.data import (
+    DAT_CHECKSUM,
+    DAT_COG,
+    DAT_CONSISTENCY,
+    DAT_FORMAT,
+    DAT_SIZE,
+    validate_data,
+)
+from reis.data import Validator as DataValidator
 from reis.model import Finding, Report, Severity
 from reis.rule import Rule
 from reis.schema import SCH_INVALID, validate_schema
@@ -16,6 +25,10 @@ from reis.structural import STR_INVALID, validate_structural
 
 GEN_MISSING_ROOT = "PTL-GEN-000"
 GEN_UNPARSEABLE = "PTL-GEN-001"
+
+# Every rule the data pass can raise; disabling all of them skips the (networked)
+# pass entirely, while disabling any subset just silences those findings.
+_DATA_RULE_IDS = frozenset({DAT_CHECKSUM, DAT_SIZE, DAT_FORMAT, DAT_COG, DAT_CONSISTENCY})
 
 _Validator = Callable[[dict[str, Any]], list[str]]
 
@@ -28,13 +41,19 @@ def _optional_passes(
     structural_validator: _Validator | None,
     schema: bool,
     schema_validator: _Validator | None,
+    data: bool,
+    data_validator: DataValidator | None,
 ) -> list[Finding]:
-    """Run the opt-in structural and schema passes, honouring their disable ids."""
+    """Run the opt-in structural, schema, and data passes, honouring disable ids."""
     findings: list[Finding] = []
     if structural and STR_INVALID not in config.disabled:
         findings.extend(validate_structural(graph, structural_validator))
     if schema and SCH_INVALID not in config.disabled:
         findings.extend(validate_schema(graph, schema_validator))
+    if data and not _DATA_RULE_IDS <= config.disabled:
+        findings.extend(
+            f for f in validate_data(graph, data_validator) if f.rule_id not in config.disabled
+        )
     return findings
 
 
@@ -47,6 +66,8 @@ def validate(
     structural_validator: Callable[[dict[str, Any]], list[str]] | None = None,
     schema: bool = False,
     schema_validator: Callable[[dict[str, Any]], list[str]] | None = None,
+    data: bool = False,
+    data_validator: DataValidator | None = None,
 ) -> Report:
     """Validate a local Portolan catalog tree.
 
@@ -62,6 +83,14 @@ def validate(
     off by default because it reaches the network and overlaps the metadata
     pass. Disabling ``PTL-SCH-001`` via ``config`` skips it. ``schema_validator``
     injects an alternate validator, chiefly for offline testing.
+
+    When ``data`` is true the data pass runs too, reading each asset's bytes
+    (local files and remote ``https`` URLs) to verify checksum, size, format,
+    and spatial metadata (see :mod:`reis.data`); it is off by default because it
+    reaches the network and needs the ``reis[data]`` extra. Disabling every
+    ``PTL-DAT-00x`` rule via ``config`` skips the pass; disabling a subset just
+    silences those findings. ``data_validator`` injects an alternate validator,
+    chiefly for offline testing.
     """
     if rules is None:
         from reis.rules import DEFAULT_RULES
@@ -134,6 +163,8 @@ def validate(
             structural_validator=structural_validator,
             schema=schema,
             schema_validator=schema_validator,
+            data=data,
+            data_validator=data_validator,
         )
     )
 
