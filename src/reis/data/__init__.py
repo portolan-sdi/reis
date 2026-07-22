@@ -35,6 +35,10 @@ DAT_SIZE = "PTL-DAT-002"
 DAT_FORMAT = "PTL-DAT-003"
 DAT_COG = "PTL-DAT-004"
 DAT_CONSISTENCY = "PTL-DAT-005"
+DAT_ORDERING = "PTL-DAT-006"
+DAT_ROWGROUP_STATS = "PTL-DAT-007"
+DAT_ROWGROUP_SIZE = "PTL-DAT-008"
+DAT_COG_STATS = "PTL-DAT-009"
 
 # Assets are declared on collections and items; catalogs carry none.
 _DATA_KINDS: tuple[Kind, ...] = ("collection", "item")

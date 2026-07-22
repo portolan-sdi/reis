@@ -207,10 +207,6 @@ def test_expected_format_variants(media: str, expected: str | None) -> None:
     assert checks._expected_format(media) == expected
 
 
-def test_is_cloud_optimized_non_string() -> None:
-    assert checks._is_cloud_optimized(None) is False
-
-
 @pytest.mark.parametrize(
     "raw,out",
     [
@@ -253,9 +249,9 @@ def test_declared_epsg_absent() -> None:
     assert checks._declared_epsg(node, {}) is None
 
 
-def test_check_cog_reader_error_is_info() -> None:
+def test_check_raster_reader_error_is_info() -> None:
     located = Locator(is_remote=False, source="/no/such/file.tif")
-    defects = checks._check_cog("data", located)
+    defects = checks._check_raster("data", located)
     assert [d.rule_id for d in defects] == [checks.DAT_COG]
     assert defects[0].severity is Severity.INFO
 
@@ -272,3 +268,58 @@ def test_consistency_unreadable_is_info() -> None:
     defects = checks._check_consistency(node, "data", _asset(), "parquet", located)
     assert [d.rule_id for d in defects] == [checks.DAT_CONSISTENCY]
     assert defects[0].severity is Severity.INFO
+
+
+def test_spatial_ordering_single_or_empty_group() -> None:
+    assert checks._is_spatially_ordered([(0.0, 0.0, 1.0, 1.0)])
+    assert checks._is_spatially_ordered([])
+
+
+def test_spatial_ordering_low_overlap() -> None:
+    disjoint = [(0.0, 0.0, 1.0, 1.0), (2.0, 2.0, 3.0, 3.0), (4.0, 4.0, 5.0, 5.0)]
+    assert checks._is_spatially_ordered(disjoint)
+
+
+def test_spatial_ordering_high_overlap_fails() -> None:
+    piled = [(0.0, 0.0, 5.0, 5.0)] * 4
+    assert not checks._is_spatially_ordered(piled)
+
+
+def test_spatial_ordering_high_locality_despite_overlap() -> None:
+    # Every consecutive pair overlaps (low-overlap fails), but each box is a small
+    # fraction of the extent, so the locality criterion carries the ordering.
+    boxes = [(float(i), 0.0, float(i) + 2.0, 1.0) for i in range(10)]
+    assert not all(  # sanity: neighbours really do overlap
+        not checks._bbox_overlaps(boxes[i], boxes[i + 1]) for i in range(len(boxes) - 1)
+    )
+    assert checks._is_spatially_ordered(boxes)
+
+
+def test_spatial_ordering_zero_extent_is_ordered() -> None:
+    assert checks._is_spatially_ordered([(1.0, 1.0, 1.0, 1.0), (1.0, 1.0, 1.0, 1.0)])
+
+
+@pytest.mark.parametrize(
+    "roles,expected",
+    [
+        (["data"], False),
+        (["data", "source"], True),
+        (["visual", "alternate"], True),
+        (None, False),
+        ("data", False),
+    ],
+)
+def test_is_alternate(roles: object, expected: bool) -> None:
+    assert checks._is_alternate({"roles": roles}) is expected
+
+
+def test_bbox_helpers() -> None:
+    assert checks._bbox_area((0.0, 0.0, 2.0, 3.0)) == 6.0
+    assert checks._bbox_overlaps((0.0, 0.0, 2.0, 2.0), (1.0, 1.0, 3.0, 3.0))
+    assert not checks._bbox_overlaps((0.0, 0.0, 1.0, 1.0), (2.0, 2.0, 3.0, 3.0))
+    assert checks._bbox_union([(0.0, 1.0, 2.0, 3.0), (-1.0, 0.0, 1.0, 5.0)]) == (
+        -1.0,
+        0.0,
+        2.0,
+        5.0,
+    )

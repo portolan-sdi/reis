@@ -8,8 +8,12 @@ and the real bytes into a :class:`reis.data.DataDefect`:
 - ``PTL-DAT-001`` recomputed multihash ≠ ``file:checksum`` (MUST)
 - ``PTL-DAT-002`` byte length ≠ ``file:size`` (MUST)
 - ``PTL-DAT-003`` magic bytes ≠ declared media type (MUST)
-- ``PTL-DAT-004`` declared cloud-optimized COG that is not one (advisory)
+- ``PTL-DAT-004`` a raster asset is not a valid COG (MUST, formats.md:91)
 - ``PTL-DAT-005`` actual bbox/CRS inconsistent with the declared metadata (advisory)
+- ``PTL-DAT-006`` GeoParquet rows are not spatially ordered (MUST, formats.md:30)
+- ``PTL-DAT-007`` no per-row-group spatial statistics (MUST, formats.md:39)
+- ``PTL-DAT-008`` a row group exceeds 150,000 rows (MUST, formats.md:50)
+- ``PTL-DAT-009`` COG bands lack embedded statistics (MUST, formats.md:95)
 
 Checks that cannot run for a given asset — bytes unreachable, an unsupported
 hash function, an unreadable header — degrade to an INFO or to silence rather
@@ -35,8 +39,12 @@ from reis.catalog import Node
 from reis.data import (
     DAT_CHECKSUM,
     DAT_COG,
+    DAT_COG_STATS,
     DAT_CONSISTENCY,
     DAT_FORMAT,
+    DAT_ORDERING,
+    DAT_ROWGROUP_SIZE,
+    DAT_ROWGROUP_STATS,
     DAT_SIZE,
     DataDefect,
 )
@@ -61,6 +69,21 @@ _HEAD_BYTES = 16  # enough for every magic-number probe below
 # bbox comparison tolerance in degrees (~1 km); absorbs rounding and
 # reprojection gridding so only genuine divergence trips PTL-DAT-005.
 _BBOX_TOL = 0.01
+
+# formats.md:50 — a GeoParquet row group MUST hold no more than this many rows.
+_MAX_ROW_GROUP_ROWS = 150_000
+
+# formats.md:30 — spatial ordering passes on either criterion.
+_MAX_OVERLAP_FRACTION = 0.30  # < 30% of consecutive row-group pairs may overlap
+_MAX_LOCALITY_RATIO = 0.25  # row-group boxes average < 25% of the file extent
+
+# geotiff-stats-headers.md — the embedded per-band statistics a COG MUST carry.
+_COG_STAT_KEYS = (
+    "STATISTICS_MINIMUM",
+    "STATISTICS_MAXIMUM",
+    "STATISTICS_MEAN",
+    "STATISTICS_STDDEV",
+)
 
 
 @dataclass(frozen=True)
@@ -100,13 +123,25 @@ def _check_asset(
     defects.extend(_check_bytes(key, asset, href, expected, node, reader))
 
     located = reader.locate(node, href)
-    if located is None:
+    if located is None or _is_alternate(asset):
+        # A source/alternate original (a non-cloud-native representation kept
+        # alongside the primary) is exempt from the cloud-native format MUSTs;
+        # its bytes are still checksum/size/format-verified above.
         return defects
-    if expected == "tiff" and _is_cloud_optimized(media_type):
-        defects.extend(_check_cog(key, located))
+    if expected == "tiff":
+        defects.extend(_check_raster(key, located))
+    if expected == "parquet":
+        defects.extend(_check_geoparquet(key, located))
     if expected in {"parquet", "tiff", "pmtiles"}:
         defects.extend(_check_consistency(node, key, asset, expected, located))
     return defects
+
+
+def _is_alternate(asset: dict[str, Any]) -> bool:
+    roles = asset.get("roles")
+    if not isinstance(roles, list):
+        return False
+    return any(isinstance(role, str) and role in ("source", "alternate") for role in roles)
 
 
 def _check_bytes(
@@ -225,7 +260,9 @@ def _verify_format(key: str, expected: str | None, head: bytes) -> list[DataDefe
     ]
 
 
-def _check_cog(key: str, located: Locator) -> list[DataDefect]:
+def _check_raster(key: str, located: Locator) -> list[DataDefect]:
+    """A raster asset MUST be a valid COG (formats.md:91) with embedded band stats."""
+    defects: list[DataDefect] = []
     try:
         is_valid, errors, _warnings = cog_validate(located.gdal_path(), quiet=True)
     except Exception as exc:  # noqa: BLE001 - a reader failure is not a conformance fault
@@ -233,22 +270,55 @@ def _check_cog(key: str, located: Locator) -> list[DataDefect]:
             DataDefect(
                 DAT_COG,
                 Severity.INFO,
-                f"asset '{key}' could not be checked for cloud-optimization ({exc})",
+                f"asset '{key}' could not be read as a raster ({exc})",
                 key,
             )
         ]
-    if is_valid and not errors:
-        return []
-    reason = errors[0] if errors else "not a cloud-optimized GeoTIFF"
-    return [
-        DataDefect(
-            DAT_COG,
-            Severity.WARNING,
-            f"asset '{key}' declares a cloud-optimized COG but is not one: {reason}",
-            key,
-            "type",
+    if not is_valid or errors:
+        reason = errors[0] if errors else "not a cloud-optimized GeoTIFF"
+        defects.append(
+            DataDefect(
+                DAT_COG,
+                Severity.ERROR,
+                f"asset '{key}' raster is not a valid cloud-optimized COG: {reason}",
+                key,
+                "type",
+            )
         )
-    ]
+    defects.extend(_check_cog_stats(key, located))
+    return defects
+
+
+def _check_cog_stats(key: str, located: Locator) -> list[DataDefect]:
+    """Every COG band MUST carry embedded min/max/mean/stddev (formats.md:95)."""
+    try:
+        # GDAL_PAM_ENABLED=NO ignores any .aux.xml sidecar, so only statistics
+        # embedded in the file's GDAL_METADATA tag count — as the spec requires.
+        with rasterio.Env(GDAL_PAM_ENABLED="NO"), rasterio.open(located.gdal_path()) as src:
+            missing = [
+                bidx
+                for bidx in range(1, src.count + 1)
+                if not all(stat in src.tags(bidx) for stat in _COG_STAT_KEYS)
+            ]
+    except Exception as exc:  # noqa: BLE001 - unreadable raster is advisory here
+        return [
+            DataDefect(
+                DAT_COG_STATS,
+                Severity.INFO,
+                f"asset '{key}' band statistics could not be read ({exc})",
+                key,
+            )
+        ]
+    if missing:
+        return [
+            DataDefect(
+                DAT_COG_STATS,
+                Severity.ERROR,
+                f"asset '{key}' band(s) {missing} lack embedded min/max/mean/stddev statistics",
+                key,
+            )
+        ]
+    return []
 
 
 def _check_consistency(
@@ -296,6 +366,165 @@ def _check_consistency(
     return defects
 
 
+# --- GeoParquet cloud-native structure -------------------------------------
+
+
+def _check_geoparquet(key: str, located: Locator) -> list[DataDefect]:
+    """A GeoParquet asset MUST have bounded row groups, per-row-group spatial
+    statistics, and spatial ordering (formats.md:30,39,50).
+
+    Parquet and GeoParquet share the ``application/vnd.apache.parquet`` media
+    type. A file with no ``geo`` metadata key is plain Parquet — legitimate
+    tabular data — so it is skipped rather than faulted; these rules apply only
+    to actual GeoParquet.
+    """
+    try:
+        source: Any = located.open_binary() if located.is_remote else located.source
+        parquet = pq.ParquetFile(source)
+    except Exception:  # noqa: BLE001 - unreadable Parquet: format/checksum checks own it
+        return []
+
+    geo = _geo_metadata(parquet)
+    if geo is None:
+        return []  # plain Parquet, not GeoParquet — nothing to enforce here
+
+    defects: list[DataDefect] = []
+    meta = parquet.metadata
+    row_counts = [meta.row_group(i).num_rows for i in range(meta.num_row_groups)]
+    if any(n > _MAX_ROW_GROUP_ROWS for n in row_counts):
+        defects.append(
+            DataDefect(
+                DAT_ROWGROUP_SIZE,
+                Severity.ERROR,
+                f"asset '{key}' has a row group of {max(row_counts)} rows, "
+                f"over the {_MAX_ROW_GROUP_ROWS} limit",
+                key,
+            )
+        )
+
+    bboxes = _row_group_bboxes(parquet, geo)
+    if bboxes is None:
+        defects.append(
+            DataDefect(
+                DAT_ROWGROUP_STATS,
+                Severity.ERROR,
+                f"asset '{key}' provides no per-row-group spatial statistics "
+                "(no bbox covering column with min/max stats, nor native GeospatialStatistics)",
+                key,
+            )
+        )
+        return defects  # without per-row-group boxes, ordering cannot be judged
+
+    if not _is_spatially_ordered(bboxes):
+        defects.append(
+            DataDefect(
+                DAT_ORDERING,
+                Severity.ERROR,
+                f"asset '{key}' rows are not spatially ordered: row groups overlap heavily "
+                "and lack locality, so a reader cannot skip them",
+                key,
+            )
+        )
+    return defects
+
+
+def _geo_metadata(parquet: Any) -> dict[str, Any] | None:
+    raw = (parquet.schema_arrow.metadata or {}).get(b"geo")
+    if raw is None:
+        return None
+    try:
+        geo = json.loads(raw)
+    except (ValueError, TypeError):
+        return None
+    return geo if isinstance(geo, dict) else None
+
+
+def _row_group_bboxes(
+    parquet: Any, geo: dict[str, Any]
+) -> list[tuple[float, float, float, float]] | None:
+    """Per-row-group [minx, miny, maxx, maxy] from the bbox covering column's stats.
+
+    Returns None when the file offers no usable per-row-group spatial statistics —
+    a 1.1 ``bbox`` covering column whose leaf fields carry Parquet min/max. Native
+    2.x ``GeospatialStatistics`` are not yet read (a known follow-up), so a 2.x file
+    without a covering column also returns None.
+    """
+    primary = geo.get("primary_column")
+    columns = geo.get("columns")
+    if not isinstance(columns, dict):
+        return None
+    covering = columns.get(primary, {}).get("covering", {}).get("bbox")
+    if not isinstance(covering, dict):
+        return None
+    try:
+        paths = {corner: ".".join(covering[corner]) for corner in ("xmin", "ymin", "xmax", "ymax")}
+    except (KeyError, TypeError):
+        return None
+
+    meta = parquet.metadata
+    index = _column_index(meta)
+    if not all(path in index for path in paths.values()):
+        return None
+
+    boxes: list[tuple[float, float, float, float]] = []
+    for i in range(meta.num_row_groups):
+        group = meta.row_group(i)
+        try:
+            minx = group.column(index[paths["xmin"]]).statistics.min
+            miny = group.column(index[paths["ymin"]]).statistics.min
+            maxx = group.column(index[paths["xmax"]]).statistics.max
+            maxy = group.column(index[paths["ymax"]]).statistics.max
+        except AttributeError:
+            return None  # a leaf without statistics does not qualify
+        if None in (minx, miny, maxx, maxy):
+            return None
+        boxes.append((float(minx), float(miny), float(maxx), float(maxy)))
+    return boxes
+
+
+def _column_index(meta: Any) -> dict[str, int]:
+    if meta.num_row_groups == 0:
+        return {}
+    group = meta.row_group(0)
+    return {group.column(j).path_in_schema: j for j in range(group.num_columns)}
+
+
+def _is_spatially_ordered(bboxes: list[tuple[float, float, float, float]]) -> bool:
+    """True if row groups are spatially ordered by either spec criterion (formats.md:30)."""
+    if len(bboxes) <= 1:
+        return True
+    pairs = len(bboxes) - 1
+    overlaps = sum(_bbox_overlaps(bboxes[i], bboxes[i + 1]) for i in range(pairs))
+    if overlaps / pairs < _MAX_OVERLAP_FRACTION:
+        return True  # low overlap
+
+    extent = _bbox_union(bboxes)
+    extent_area = _bbox_area(extent)
+    if extent_area == 0:
+        return True  # a single location — nothing to order
+    mean_ratio = sum(_bbox_area(b) for b in bboxes) / len(bboxes) / extent_area
+    return mean_ratio < _MAX_LOCALITY_RATIO  # high locality
+
+
+def _bbox_area(b: tuple[float, float, float, float]) -> float:
+    return max(0.0, b[2] - b[0]) * max(0.0, b[3] - b[1])
+
+
+def _bbox_overlaps(a: tuple[float, ...], b: tuple[float, ...]) -> bool:
+    return min(a[2], b[2]) > max(a[0], b[0]) and min(a[3], b[3]) > max(a[1], b[1])
+
+
+def _bbox_union(
+    bboxes: list[tuple[float, float, float, float]],
+) -> tuple[float, float, float, float]:
+    return (
+        min(b[0] for b in bboxes),
+        min(b[1] for b in bboxes),
+        max(b[2] for b in bboxes),
+        max(b[3] for b in bboxes),
+    )
+
+
 # --- format probing --------------------------------------------------------
 
 
@@ -312,10 +541,6 @@ def _expected_format(media_type: str) -> str | None:
     if lowered.startswith("image/jpeg") or lowered.startswith("image/jpg"):
         return "jpeg"
     return None
-
-
-def _is_cloud_optimized(media_type: Any) -> bool:
-    return isinstance(media_type, str) and "cloud-optimized" in media_type.lower()
 
 
 def _detect_format(head: bytes) -> str | None:

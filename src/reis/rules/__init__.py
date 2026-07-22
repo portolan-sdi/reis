@@ -25,6 +25,7 @@ from reis.rules.links import (
     RequiredLinksRule,
     StructuralLinkTypeRule,
 )
+from reis.rules.partitions import PartitionGlobRule
 from reis.rules.provenance import (
     MirrorCanonicalLinkRule,
     MirrorUpdatedRule,
@@ -77,6 +78,7 @@ DEFAULT_RULES: tuple[Rule, ...] = (
     StylesForDerivativeRule(),
     PMTilesRegistrationRule(),
     LargeVectorWithoutVisualRule(),
+    PartitionGlobRule(),
 )
 
 __all__ = ["DEFAULT_RULES"]
