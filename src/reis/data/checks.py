@@ -14,7 +14,6 @@ and the real bytes into a :class:`reis.data.DataDefect`:
 - ``PTL-DAT-007`` no per-row-group spatial statistics (MUST, formats.md:39)
 - ``PTL-DAT-008`` a row group exceeds 150,000 rows (MUST, formats.md:50)
 - ``PTL-DAT-009`` COG bands lack embedded statistics (MUST, formats.md:95)
-- ``PTL-DAT-010`` a GeoParquet asset carries no ``geo`` metadata (MUST, formats.md:25)
 
 Checks that cannot run for a given asset — bytes unreachable, an unsupported
 hash function, an unreadable header — degrade to an INFO or to silence rather
@@ -43,7 +42,6 @@ from reis.data import (
     DAT_COG_STATS,
     DAT_CONSISTENCY,
     DAT_FORMAT,
-    DAT_GEOPARQUET,
     DAT_ORDERING,
     DAT_ROWGROUP_SIZE,
     DAT_ROWGROUP_STATS,
@@ -125,7 +123,10 @@ def _check_asset(
     defects.extend(_check_bytes(key, asset, href, expected, node, reader))
 
     located = reader.locate(node, href)
-    if located is None:
+    if located is None or _is_alternate(asset):
+        # A source/alternate original (a non-cloud-native representation kept
+        # alongside the primary) is exempt from the cloud-native format MUSTs;
+        # its bytes are still checksum/size/format-verified above.
         return defects
     if expected == "tiff":
         defects.extend(_check_raster(key, located))
@@ -134,6 +135,13 @@ def _check_asset(
     if expected in {"parquet", "tiff", "pmtiles"}:
         defects.extend(_check_consistency(node, key, asset, expected, located))
     return defects
+
+
+def _is_alternate(asset: dict[str, Any]) -> bool:
+    roles = asset.get("roles")
+    if not isinstance(roles, list):
+        return False
+    return any(isinstance(role, str) and role in ("source", "alternate") for role in roles)
 
 
 def _check_bytes(
@@ -362,32 +370,23 @@ def _check_consistency(
 
 
 def _check_geoparquet(key: str, located: Locator) -> list[DataDefect]:
-    """A GeoParquet asset MUST carry geo metadata, bounded row groups, per-row-group
-    spatial statistics, and spatial ordering (formats.md:25,30,39,50)."""
+    """A GeoParquet asset MUST have bounded row groups, per-row-group spatial
+    statistics, and spatial ordering (formats.md:30,39,50).
+
+    Parquet and GeoParquet share the ``application/vnd.apache.parquet`` media
+    type. A file with no ``geo`` metadata key is plain Parquet — legitimate
+    tabular data — so it is skipped rather than faulted; these rules apply only
+    to actual GeoParquet.
+    """
     try:
         source: Any = located.open_binary() if located.is_remote else located.source
         parquet = pq.ParquetFile(source)
-    except Exception as exc:  # noqa: BLE001 - unreadable Parquet is advisory
-        return [
-            DataDefect(
-                DAT_GEOPARQUET,
-                Severity.INFO,
-                f"asset '{key}' could not be read as Parquet ({exc})",
-                key,
-            )
-        ]
+    except Exception:  # noqa: BLE001 - unreadable Parquet: format/checksum checks own it
+        return []
 
     geo = _geo_metadata(parquet)
     if geo is None:
-        return [
-            DataDefect(
-                DAT_GEOPARQUET,
-                Severity.ERROR,
-                f"asset '{key}' declares GeoParquet but carries no 'geo' metadata key",
-                key,
-                "type",
-            )
-        ]
+        return []  # plain Parquet, not GeoParquet — nothing to enforce here
 
     defects: list[DataDefect] = []
     meta = parquet.metadata

@@ -15,7 +15,6 @@ from reis.data import (
     DAT_COG_STATS,
     DAT_CONSISTENCY,
     DAT_FORMAT,
-    DAT_GEOPARQUET,
     DAT_ORDERING,
     DAT_ROWGROUP_SIZE,
     DAT_ROWGROUP_STATS,
@@ -44,7 +43,6 @@ _DATA_RULE_IDS = frozenset(
         DAT_ROWGROUP_STATS,
         DAT_ROWGROUP_SIZE,
         DAT_COG_STATS,
-        DAT_GEOPARQUET,
     }
 )
 

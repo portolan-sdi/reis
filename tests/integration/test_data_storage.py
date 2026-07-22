@@ -8,7 +8,8 @@ each non-compliant variant raises exactly the rule it violates (formats.md:30/39
 
 from __future__ import annotations
 
-from pathlib import Path
+from collections.abc import Iterator
+from pathlib import Path, PurePosixPath
 
 import pytest
 
@@ -17,10 +18,10 @@ pytest.importorskip("rasterio")
 pytest.importorskip("rio_cogeo")
 
 import reis.data.checks as checks  # noqa: E402
+from reis.catalog import Node  # noqa: E402
 from reis.data import (  # noqa: E402
     DAT_COG,
     DAT_COG_STATS,
-    DAT_GEOPARQUET,
     DAT_ORDERING,
     DAT_ROWGROUP_SIZE,
     DAT_ROWGROUP_STATS,
@@ -34,6 +35,30 @@ pytestmark = pytest.mark.integration
 
 def _loc(path: Path) -> Locator:
     return Locator(is_remote=False, source=str(path))
+
+
+class _FileReader:
+    """An asset reader backed by one local file, for driving check_node."""
+
+    def __init__(self, href: str, path: Path) -> None:
+        self._href = href
+        self._path = path
+
+    def stream(self, node: Node, href: str) -> Iterator[bytes] | None:
+        return iter([self._path.read_bytes()]) if href == self._href else None
+
+    def locate(self, node: Node, href: str) -> Locator | None:
+        return _loc(self._path) if href == self._href else None
+
+
+def _node_with_asset(asset: dict) -> Node:
+    return Node(
+        path=PurePosixPath("layers/scene/scene.json"),
+        abs_path=Path("/nowhere/scene.json"),
+        kind="item",
+        id="scene",
+        data={"type": "Feature", "bbox": [4.0, 50.0, 6.0, 52.0], "assets": {"a": asset}},
+    )
 
 
 def _gpq(path: Path) -> list:
@@ -77,12 +102,12 @@ def test_oversized_rowgroup_flags_dat_008(tmp_path: Path) -> None:
     assert next(d for d in defects if d.rule_id == DAT_ROWGROUP_SIZE).severity is Severity.ERROR
 
 
-def test_missing_geo_metadata_flags_dat_010(tmp_path: Path) -> None:
+def test_plain_parquet_is_skipped(tmp_path: Path) -> None:
+    # No 'geo' metadata key: legitimate tabular Parquet, not GeoParquet. The
+    # storage rules must not fire (media type alone cannot tell them apart).
     path = tmp_path / "plain.parquet"
-    assets.write_geoparquet(path, geo=False)
-    defects = _gpq(path)
-    assert [d.rule_id for d in defects] == [DAT_GEOPARQUET]
-    assert defects[0].severity is Severity.ERROR
+    assets.write_geoparquet(path, geo=False, points=assets.interleaved_points())
+    assert _gpq(path) == []
 
 
 # --- COG -------------------------------------------------------------------
@@ -108,3 +133,33 @@ def test_non_cog_raster_flags_dat_004(tmp_path: Path) -> None:
     ids = [d.rule_id for d in _raster(path)]
     assert DAT_COG in ids
     assert next(d for d in _raster(path) if d.rule_id == DAT_COG).severity is Severity.ERROR
+
+
+# --- alternate / source exemption ------------------------------------------
+
+
+def test_source_alternate_tiff_is_exempt(tmp_path: Path) -> None:
+    # A non-cloud-native original kept alongside the primary (roles data+source)
+    # is exempt from the COG MUST — the reference catalog does exactly this.
+    path = tmp_path / "source.tif"
+    assets.write_plain_tiff(path)
+    asset = {
+        "href": "./source.tif",
+        "type": "image/tiff; application=geotiff",
+        "roles": ["data", "source"],
+    }
+    reader = _FileReader("./source.tif", path)
+    assert checks.check_node(_node_with_asset(asset), reader) == []
+
+
+def test_primary_non_cog_tiff_is_still_flagged(tmp_path: Path) -> None:
+    path = tmp_path / "primary.tif"
+    assets.write_plain_tiff(path)
+    asset = {
+        "href": "./primary.tif",
+        "type": "image/tiff; application=geotiff",
+        "roles": ["data"],
+    }
+    reader = _FileReader("./primary.tif", path)
+    ids = [d.rule_id for d in checks.check_node(_node_with_asset(asset), reader)]
+    assert DAT_COG in ids

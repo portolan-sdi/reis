@@ -299,6 +299,20 @@ def test_spatial_ordering_zero_extent_is_ordered() -> None:
     assert checks._is_spatially_ordered([(1.0, 1.0, 1.0, 1.0), (1.0, 1.0, 1.0, 1.0)])
 
 
+@pytest.mark.parametrize(
+    "roles,expected",
+    [
+        (["data"], False),
+        (["data", "source"], True),
+        (["visual", "alternate"], True),
+        (None, False),
+        ("data", False),
+    ],
+)
+def test_is_alternate(roles: object, expected: bool) -> None:
+    assert checks._is_alternate({"roles": roles}) is expected
+
+
 def test_bbox_helpers() -> None:
     assert checks._bbox_area((0.0, 0.0, 2.0, 3.0)) == 6.0
     assert checks._bbox_overlaps((0.0, 0.0, 2.0, 2.0), (1.0, 1.0, 3.0, 3.0))

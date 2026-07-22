@@ -95,7 +95,7 @@ Findings carry a stable rule id (`PTL-<GROUP>-<NNN>`), a severity, a message, an
 | `PTL-PRO` | 001–004 | mirror `via`/`canonical` links and `updated` sync time; officials carry no upstream links |
 | `PTL-VIZ` | 001–004 | thumbnail on geospatial collections, style assets for visual derivatives, PMTiles `rel:"pmtiles"` registration, large-vector-without-visual nudge |
 | `PTL-STR` | 000–001 | STAC 1.1.0 core structural validity (`stac-validator`); `000` warns when the pass could not run |
-| `PTL-DAT` | 000–010 | asset bytes vs metadata and the format MUSTs: `file:checksum`, `file:size`, format magic, bbox/CRS; valid COG with embedded band statistics; GeoParquet spatial ordering, per-row-group statistics, row-group size, and `geo` metadata; `000` warns when the `reis[data]` extra is absent |
+| `PTL-DAT` | 000–009 | asset bytes vs metadata and the format MUSTs: `file:checksum`, `file:size`, format magic, bbox/CRS; valid COG with embedded band statistics; GeoParquet spatial ordering, per-row-group statistics, and row-group size; `000` warns when the `reis[data]` extra is absent. Source/alternate assets are exempt from the format MUSTs; plain (non-geo) Parquet is skipped |
 | `PTL-PRT` | 001 | a partitioned collection advertises a glob pattern for its partitions |
 
 The catalog tree is loaded from a local directory. `CatalogGraph` (`src/reis/catalog.py`) is the single I/O layer for the metadata, loaded in one pass, so a remote (HTTP) catalog loader can slot in later; the data pass already reads asset bytes over `https`.

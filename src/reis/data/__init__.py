@@ -39,7 +39,6 @@ DAT_ORDERING = "PTL-DAT-006"
 DAT_ROWGROUP_STATS = "PTL-DAT-007"
 DAT_ROWGROUP_SIZE = "PTL-DAT-008"
 DAT_COG_STATS = "PTL-DAT-009"
-DAT_GEOPARQUET = "PTL-DAT-010"
 
 # Assets are declared on collections and items; catalogs carry none.
 _DATA_KINDS: tuple[Kind, ...] = ("collection", "item")
