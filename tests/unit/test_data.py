@@ -19,8 +19,13 @@ from reis.config import RulesConfig
 from reis.data import (
     DAT_CHECKSUM,
     DAT_COG,
+    DAT_COG_STATS,
     DAT_CONSISTENCY,
     DAT_FORMAT,
+    DAT_GEOPARQUET,
+    DAT_ORDERING,
+    DAT_ROWGROUP_SIZE,
+    DAT_ROWGROUP_STATS,
     DAT_SIZE,
     DAT_UNAVAILABLE,
     DataDefect,
@@ -147,7 +152,20 @@ def test_disabling_all_rules_skips_pass(catalog: CatalogBuilder) -> None:
         called = True
         return []
 
-    all_ids = frozenset({DAT_CHECKSUM, DAT_SIZE, DAT_FORMAT, DAT_COG, DAT_CONSISTENCY})
+    all_ids = frozenset(
+        {
+            DAT_CHECKSUM,
+            DAT_SIZE,
+            DAT_FORMAT,
+            DAT_COG,
+            DAT_CONSISTENCY,
+            DAT_ORDERING,
+            DAT_ROWGROUP_STATS,
+            DAT_ROWGROUP_SIZE,
+            DAT_COG_STATS,
+            DAT_GEOPARQUET,
+        }
+    )
     validate(graph_root, config=RulesConfig(disabled=all_ids), data=True, data_validator=spy)
 
     assert called is False
