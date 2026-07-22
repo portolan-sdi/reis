@@ -1,0 +1,96 @@
+name: Spec Sync
+
+# Canary for spec drift. reis is pinned to a portolan-spec commit (SPEC_REF) and
+# its fixtures are vendored from it. This job re-vendors from spec `main` daily;
+# if the reference catalog or any published schema changed, it opens (or updates)
+# a pull request with the refreshed fixtures. That PR's own test run is the
+# verdict: a pure-data change stays green and is mergeable, while a schema-URI or
+# rule change trips the keystone guard (tests/unit/test_schema_uri_invariant.py)
+# and lands as a red PR that forces a matching code fix in reis.
+
+on:
+  schedule:
+    - cron: '17 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: spec-sync
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out reis
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # The push below authenticates via `gh auth setup-git`, so the
+          # checkout's own credentials need not be persisted into .git/config.
+          persist-credentials: false
+
+      - name: Clone portolan-spec main
+        run: |
+          git clone --depth 1 \
+            https://github.com/portolan-sdi/portolan-spec.git \
+            "$RUNNER_TEMP/portolan-spec"
+
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          enable-cache: true
+
+      - name: Re-vendor fixtures from spec main
+        run: |
+          uv run python scripts/vendor_spec_fixtures.py \
+            --spec "$RUNNER_TEMP/portolan-spec"
+
+      - name: Detect fixture drift
+        id: drift
+        run: |
+          if git diff --quiet -- tests/fixtures; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Fixtures already match spec main; nothing to sync."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Spec main has drifted from the vendored fixtures:"
+            git --no-pager diff --stat -- tests/fixtures SPEC_REF
+          fi
+
+      - name: Open or update sync PR
+        if: steps.drift.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          BRANCH="chore/spec-sync"
+          REF="$(sed -n '3p' SPEC_REF)"
+          SHORT="${REF:0:12}"
+          gh auth setup-git
+          git config user.name "portolan-bot"
+          git config user.email "portolan@googlegroups.com"
+          git checkout -B "$BRANCH"
+          git add tests/fixtures SPEC_REF
+          git commit -m "chore: sync spec fixtures to ${SHORT}"
+          git push -f origin "$BRANCH"
+          cat > "$RUNNER_TEMP/pr-body.md" <<'BODY'
+          Automated re-vendor of the portolan-spec fixtures from `main` (`__SHORT__`),
+          via `scripts/vendor_spec_fixtures.py`.
+
+          The test run on this PR is the verdict:
+
+          - **Green** — a data-only change (new or edited catalog objects). Review and merge.
+          - **Red on `test_schema_uri_invariant`** — the spec changed its schema URI or shape.
+            reis needs a matching code change (e.g. `SCHEMA_URI_PATTERN`, `DEFAULT_SCHEMA_URI`)
+            on this branch before it can merge.
+          BODY
+          sed -i "s/__SHORT__/${SHORT}/" "$RUNNER_TEMP/pr-body.md"
+          if gh pr view "$BRANCH" --json state --jq .state 2>/dev/null | grep -q OPEN; then
+            echo "Existing PR updated in place."
+          else
+            gh pr create --base main --head "$BRANCH" \
+              --title "chore: sync spec fixtures to ${SHORT}" \
+              --body-file "$RUNNER_TEMP/pr-body.md"
+          fi

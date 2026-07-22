@@ -2,7 +2,7 @@
 
 The default validator reaches the network, so every deterministic test injects
 a fake ``Validator`` (or monkeypatches ``default_validator``); one self-skipping
-test exercises the real published schema when schema.portolan-sdi.org is
+test exercises the real published schema when schemas.portolan-sdi.org is
 reachable.
 """
 
@@ -63,7 +63,7 @@ def test_validator_failure_is_a_single_warning(catalog: CatalogBuilder) -> None:
     graph = _graph(catalog)
 
     def boom(data: dict) -> list[str]:
-        raise RuntimeError("could not reach schema.portolan-sdi.org")
+        raise RuntimeError("could not reach schemas.portolan-sdi.org")
 
     findings = validate_schema(graph, boom)
     assert len(findings) == 1

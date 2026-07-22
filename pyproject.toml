@@ -83,7 +83,7 @@ addopts = [
 markers = [
     "unit: fast, isolated tests",
     "integration: end-to-end validation runs",
-    "network: exercises real validators (needs schemas.stacspec.org / schema.portolan-sdi.org)",
+    "network: exercises real validators (needs schemas.stacspec.org / schemas.portolan-sdi.org)",
 ]
 
 [tool.coverage.report]
