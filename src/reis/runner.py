@@ -28,13 +28,14 @@ def _optional_passes(
     structural_validator: _Validator | None,
     schema: bool,
     schema_validator: _Validator | None,
+    schema_uri: str | None,
 ) -> list[Finding]:
     """Run the opt-in structural and schema passes, honouring their disable ids."""
     findings: list[Finding] = []
     if structural and STR_INVALID not in config.disabled:
         findings.extend(validate_structural(graph, structural_validator))
     if schema and SCH_INVALID not in config.disabled:
-        findings.extend(validate_schema(graph, schema_validator))
+        findings.extend(validate_schema(graph, schema_validator, schema_uri))
     return findings
 
 
@@ -47,6 +48,7 @@ def validate(
     structural_validator: Callable[[dict[str, Any]], list[str]] | None = None,
     schema: bool = False,
     schema_validator: Callable[[dict[str, Any]], list[str]] | None = None,
+    schema_uri: str | None = None,
 ) -> Report:
     """Validate a local Portolan catalog tree.
 
@@ -60,8 +62,12 @@ def validate(
     When ``schema`` is true the Portolan profile schema pass runs too, applying
     the published JSON Schema to every object (see :mod:`reis.schema`); it is
     off by default because it reaches the network and overlaps the metadata
-    pass. Disabling ``PTL-SCH-001`` via ``config`` skips it. ``schema_validator``
-    injects an alternate validator, chiefly for offline testing.
+    pass. It always validates against the canonical Portolan profile schema,
+    never whatever URI the catalog itself declares. Disabling ``PTL-SCH-001``
+    via ``config`` skips it. ``schema_validator`` injects an alternate
+    validator, chiefly for offline testing. ``schema_uri`` overrides the
+    canonical schema URL, a trusted operator choice; omitted, the pass uses
+    the canonical constant (see :data:`reis.schema.CANONICAL_SCHEMA_URI`).
     """
     if rules is None:
         from reis.rules import DEFAULT_RULES
@@ -134,6 +140,7 @@ def validate(
             structural_validator=structural_validator,
             schema=schema,
             schema_validator=schema_validator,
+            schema_uri=schema_uri,
         )
     )
 

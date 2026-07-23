@@ -15,11 +15,13 @@ reported twice — once by a hand rule with a fix hint, once here with the schem
 own message; the second is the canonical verdict.
 
 The validator is injectable so the pass can be exercised offline in tests. The
-default implementation fetches the schema over the network (cached in-process)
-from the URI the root catalog declares, falling back to the pinned v0.1 URI. A
-validator that cannot run — the ``jsonschema`` package is absent, or the schema
-is unreachable — downgrades to a single WARNING so the offline metadata findings
-still surface.
+default implementation always fetches the one canonical Portolan profile
+schema (cached in-process), never whatever URI an individual catalog
+declares. An operator may override the URL (CLI ``--schema-uri``;
+``validate(..., schema_uri=...)``), a trusted choice unlike a catalog's own
+declaration; omitting it uses the canonical constant. A validator that cannot
+run, the ``jsonschema`` package is absent or the schema is unreachable,
+downgrades to a single WARNING so the offline metadata findings still surface.
 """
 
 from __future__ import annotations
@@ -31,34 +33,19 @@ from typing import Any
 
 from reis.catalog import CatalogGraph, Kind
 from reis.model import Finding, Severity
-from reis.rules.conformance import declared_schema_uris
 
 SCH_INVALID = "PTL-SCH-001"
 SCH_UNAVAILABLE = "PTL-SCH-000"
 
-# The pinned v0.1 profile schema, used when the root declares no single URI.
-DEFAULT_SCHEMA_URI = "https://schema.portolan-sdi.org/v0.1.0/schema.json"
+# The one canonical Portolan profile schema. The schema pass always validates
+# against this URL, regardless of what a catalog's own stac_extensions declare.
+CANONICAL_SCHEMA_URI = "https://schemas.portolan-sdi.org/portolan/v0.1.0/schema.json"
 
 # A validator maps one object's raw JSON to a list of schema-error messages;
 # an empty list means the object satisfies the Portolan profile schema.
 Validator = Callable[[dict[str, Any]], list[str]]
 
 _SCHEMA_KINDS: tuple[Kind, ...] = ("catalog", "collection", "item")
-
-
-def _schema_uri_for(graph: CatalogGraph) -> str:
-    """The schema URI to validate against: the root's declared one, or the default.
-
-    The profile schema is a single document (``oneOf`` Catalog/Collection/Item),
-    so one URI validates every object in the tree. A malformed or ambiguous root
-    declaration is the metadata pass's concern (``PTL-CNF-001``); here it simply
-    falls back to the pinned default rather than failing the schema pass.
-    """
-    if graph.root is not None:
-        uris = declared_schema_uris(graph.root)
-        if len(uris) == 1:
-            return uris[0]
-    return DEFAULT_SCHEMA_URI
 
 
 def _is_discriminator(error: Any) -> bool:
@@ -94,7 +81,7 @@ def _fetch_schema(schema_uri: str) -> dict[str, Any]:
     return schema
 
 
-def default_validator(schema_uri: str = DEFAULT_SCHEMA_URI) -> Validator:
+def default_validator(schema_uri: str = CANONICAL_SCHEMA_URI) -> Validator:
     """Build the ``jsonschema``-backed Portolan profile validator.
 
     Imported lazily: the metadata pass never needs ``jsonschema``, and the first
@@ -135,6 +122,12 @@ def validate_schema(
 ) -> list[Finding]:
     """Validate every catalog, collection, and item against the profile schema.
 
+    Always validates against the canonical Portolan profile schema
+    (``CANONICAL_SCHEMA_URI``), never whatever URI a catalog's own
+    ``stac_extensions`` declares. Pass ``schema_uri`` to override the URL,
+    a trusted operator choice (e.g. to pin a pre-release schema); when
+    omitted, the canonical constant is used.
+
     Returns ``PTL-SCH-001`` errors for each schema failure. If the validator is
     unavailable (missing package) or a call fails (typically the schema fetch
     could not reach the network), returns a single ``PTL-SCH-000`` warning
@@ -142,7 +135,7 @@ def validate_schema(
     per object.
     """
     if validator is None:
-        uri = schema_uri if schema_uri is not None else _schema_uri_for(graph)
+        uri = schema_uri if schema_uri is not None else CANONICAL_SCHEMA_URI
         try:
             validator = default_validator(uri)
         except ImportError:

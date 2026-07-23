@@ -70,3 +70,44 @@ def test_cli_json_output(catalog: CatalogBuilder) -> None:
 def test_cli_missing_path_is_usage_error() -> None:
     result = CliRunner().invoke(main, ["check", "/definitely/not/here"])
     assert result.exit_code == 2
+
+
+def test_cli_schema_uri_implies_schema_pass_and_is_used(
+    catalog: CatalogBuilder, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--schema-uri alone (no --schema) still runs the schema pass, with the
+    override URL, not the canonical default."""
+    import reis.schema as schema
+
+    root = catalog.write()
+    seen_uris: list[str] = []
+
+    def fake_default_validator(uri: str) -> schema.Validator:
+        seen_uris.append(uri)
+        return lambda data: []
+
+    monkeypatch.setattr(schema, "default_validator", fake_default_validator)
+    override = "https://example.org/pinned/schema.json"
+    result = CliRunner().invoke(
+        main, ["check", "--no-structural", "--schema-uri", override, str(root)]
+    )
+    assert result.exit_code == 0
+    assert seen_uris == [override]
+
+
+def test_cli_schema_flag_without_uri_uses_canonical(
+    catalog: CatalogBuilder, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import reis.schema as schema
+
+    root = catalog.write()
+    seen_uris: list[str] = []
+
+    def fake_default_validator(uri: str) -> schema.Validator:
+        seen_uris.append(uri)
+        return lambda data: []
+
+    monkeypatch.setattr(schema, "default_validator", fake_default_validator)
+    result = CliRunner().invoke(main, ["check", "--no-structural", "--schema", str(root)])
+    assert result.exit_code == 0
+    assert seen_uris == [schema.CANONICAL_SCHEMA_URI]

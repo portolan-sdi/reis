@@ -42,13 +42,33 @@ def main() -> None:
     "--schema/--no-schema",
     "schema",
     default=False,
-    help="Also validate against the published Portolan profile schema (needs network).",
+    help="Also validate against the canonical Portolan profile schema (needs network).",
 )
-def check(catalog_path: Path, as_json: bool, structural: bool, schema: bool) -> None:
+@click.option(
+    "--schema-uri",
+    "schema_uri",
+    default=None,
+    help=(
+        "Override the URL the schema pass validates against (implies --schema). "
+        "Defaults to the canonical Portolan profile schema."
+    ),
+)
+def check(
+    catalog_path: Path,
+    as_json: bool,
+    structural: bool,
+    schema: bool,
+    schema_uri: str | None,
+) -> None:
     """Validate CATALOG_PATH: the Portolan metadata pass, the STAC 1.1.0
     structural pass (unless --no-structural), and — with --schema — the
-    published Portolan profile schema."""
-    report = validate(catalog_path, structural=structural, schema=schema)
+    canonical Portolan profile schema."""
+    report = validate(
+        catalog_path,
+        structural=structural,
+        schema=schema or schema_uri is not None,
+        schema_uri=schema_uri,
+    )
     if as_json:
         click.echo(json_module.dumps(report.to_dict(), indent=2))
     else:

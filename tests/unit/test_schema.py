@@ -2,7 +2,7 @@
 
 The default validator reaches the network, so every deterministic test injects
 a fake ``Validator`` (or monkeypatches ``default_validator``); one self-skipping
-test exercises the real published schema when schema.portolan-sdi.org is
+test exercises the real published schema when schemas.portolan-sdi.org is
 reachable.
 """
 
@@ -13,8 +13,8 @@ import pytest
 from reis import RulesConfig, validate, validate_schema
 from reis.catalog import CatalogGraph
 from reis.model import Severity
-from reis.schema import DEFAULT_SCHEMA_URI, _schema_uri_for, default_validator
-from tests.conftest import PORTOLAN_URI, CatalogBuilder, mutate_json
+from reis.schema import CANONICAL_SCHEMA_URI, default_validator
+from tests.conftest import CatalogBuilder, mutate_json
 
 pytestmark = pytest.mark.unit
 
@@ -63,7 +63,7 @@ def test_validator_failure_is_a_single_warning(catalog: CatalogBuilder) -> None:
     graph = _graph(catalog)
 
     def boom(data: dict) -> list[str]:
-        raise RuntimeError("could not reach schema.portolan-sdi.org")
+        raise RuntimeError("could not reach schemas.portolan-sdi.org")
 
     findings = validate_schema(graph, boom)
     assert len(findings) == 1
@@ -127,15 +127,49 @@ def test_unparseable_object_is_skipped(catalog: CatalogBuilder) -> None:
     assert "Collection" not in seen  # the broken collection never reached the validator
 
 
-def test_schema_uri_prefers_root_declaration(catalog: CatalogBuilder) -> None:
-    catalog.collection("roads")
-    assert _schema_uri_for(_graph(catalog)) == PORTOLAN_URI
+def test_schema_pass_ignores_catalog_declared_uri(
+    catalog: CatalogBuilder, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The schema pass always targets the canonical schema, never whatever URI
+    a catalog's own stac_extensions declares."""
+    import reis.schema as schema
 
-
-def test_schema_uri_falls_back_to_default(catalog: CatalogBuilder) -> None:
     root = catalog.write()
-    mutate_json(root / "catalog.json", lambda d: d.__setitem__("stac_extensions", []))
-    assert _schema_uri_for(CatalogGraph.load(root)) == DEFAULT_SCHEMA_URI
+    mutate_json(
+        root / "catalog.json",
+        lambda d: d.__setitem__(
+            "stac_extensions",
+            ["https://schemas.portolan-sdi.org/portolan/v0.2.0/schema.json"],
+        ),
+    )
+    seen_uris: list[str] = []
+
+    def fake_default_validator(uri: str) -> schema.Validator:
+        seen_uris.append(uri)
+        return lambda data: []
+
+    monkeypatch.setattr(schema, "default_validator", fake_default_validator)
+    schema.validate_schema(CatalogGraph.load(root), None)
+    assert seen_uris == [CANONICAL_SCHEMA_URI]
+
+
+def test_schema_uri_override_is_honored(
+    catalog: CatalogBuilder, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An explicit schema_uri overrides the canonical default."""
+    import reis.schema as schema
+
+    root = catalog.write()
+    seen_uris: list[str] = []
+
+    def fake_default_validator(uri: str) -> schema.Validator:
+        seen_uris.append(uri)
+        return lambda data: []
+
+    monkeypatch.setattr(schema, "default_validator", fake_default_validator)
+    override = "https://example.org/pinned/schema.json"
+    schema.validate_schema(CatalogGraph.load(root), None, schema_uri=override)
+    assert seen_uris == [override]
 
 
 def test_default_validator_formats_errors(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -258,9 +292,9 @@ def test_real_schema_accepts_the_builder(catalog: CatalogBuilder) -> None:
     import urllib.request
 
     try:
-        urllib.request.urlopen(DEFAULT_SCHEMA_URI, timeout=5)  # noqa: S310
+        urllib.request.urlopen(CANONICAL_SCHEMA_URI, timeout=5)  # noqa: S310
     except Exception:  # noqa: BLE001
-        pytest.skip(f"{DEFAULT_SCHEMA_URI} unreachable")
+        pytest.skip(f"{CANONICAL_SCHEMA_URI} unreachable")
 
     collection = catalog.collection("roads")
     collection.item("seg1")
