@@ -22,6 +22,15 @@ from reis.data import (
     validate_data,
 )
 from reis.data import Validator as DataValidator
+from reis.live import (
+    LIV_CORS_EXPOSE,
+    LIV_CORS_ORIGIN,
+    LIV_CORS_PREFLIGHT,
+    LIV_HEAD_LENGTH,
+    LIV_RANGE,
+    validate_live,
+)
+from reis.live import Prober as LiveProber
 from reis.model import Finding, Report, Severity
 from reis.rule import Rule
 from reis.schema import SCH_INVALID, validate_schema
@@ -46,6 +55,18 @@ _DATA_RULE_IDS = frozenset(
     }
 )
 
+# Every rule the live pass can raise; disabling all of them skips the (networked)
+# pass entirely, while disabling any subset just silences those findings.
+_LIVE_RULE_IDS = frozenset(
+    {
+        LIV_RANGE,
+        LIV_HEAD_LENGTH,
+        LIV_CORS_ORIGIN,
+        LIV_CORS_EXPOSE,
+        LIV_CORS_PREFLIGHT,
+    }
+)
+
 _Validator = Callable[[dict[str, Any]], list[str]]
 
 
@@ -59,8 +80,10 @@ def _optional_passes(
     schema_validator: _Validator | None,
     data: bool,
     data_validator: DataValidator | None,
+    live: bool,
+    live_prober: LiveProber | None,
 ) -> list[Finding]:
-    """Run the opt-in structural, schema, and data passes, honouring disable ids."""
+    """Run the opt-in structural, schema, data, and live passes, honouring disable ids."""
     findings: list[Finding] = []
     if structural and STR_INVALID not in config.disabled:
         findings.extend(validate_structural(graph, structural_validator))
@@ -69,6 +92,10 @@ def _optional_passes(
     if data and not _DATA_RULE_IDS <= config.disabled:
         findings.extend(
             f for f in validate_data(graph, data_validator) if f.rule_id not in config.disabled
+        )
+    if live and not _LIVE_RULE_IDS <= config.disabled:
+        findings.extend(
+            f for f in validate_live(graph, live_prober) if f.rule_id not in config.disabled
         )
     return findings
 
@@ -84,6 +111,8 @@ def validate(
     schema_validator: Callable[[dict[str, Any]], list[str]] | None = None,
     data: bool = False,
     data_validator: DataValidator | None = None,
+    live: bool = False,
+    live_prober: LiveProber | None = None,
 ) -> Report:
     """Validate a local Portolan catalog tree.
 
@@ -107,6 +136,13 @@ def validate(
     ``PTL-DAT-00x`` rule via ``config`` skips the pass; disabling a subset just
     silences those findings. ``data_validator`` injects an alternate validator,
     chiefly for offline testing.
+
+    When ``live`` is true the live-hosting pass runs too, probing the servers
+    behind absolute ``https`` asset hrefs for HTTP range support and CORS (see
+    :mod:`reis.live`); it is off by default because it reaches the network.
+    Disabling every ``PTL-LIV-00x`` rule via ``config`` skips the pass;
+    disabling a subset just silences those findings. ``live_prober`` injects an
+    alternate prober, chiefly for offline testing.
     """
     if rules is None:
         from reis.rules import DEFAULT_RULES
@@ -181,6 +217,8 @@ def validate(
             schema_validator=schema_validator,
             data=data,
             data_validator=data_validator,
+            live=live,
+            live_prober=live_prober,
         )
     )
 

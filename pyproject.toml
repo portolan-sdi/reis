@@ -124,6 +124,7 @@ source_modules = [
     "reis.runner",
     "reis.config",
     "reis.rules",
+    "reis.live",
 ]
 forbidden_modules = ["click"]
 
@@ -147,6 +148,7 @@ source_modules = [
     "reis.schema",
     "reis.structural",
     "reis.cli",
+    "reis.live",
     "reis.data.reader",
 ]
 forbidden_modules = ["pyarrow", "rasterio", "pyproj", "rio_cogeo"]
