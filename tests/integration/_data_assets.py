@@ -100,7 +100,14 @@ def write_geoparquet(
     pq.write_table(table, path, row_group_size=row_group_size)
 
 
-def write_cog(path: Path, *, stats: bool = True, size: int = 1024) -> None:
+def write_cog(
+    path: Path,
+    *,
+    stats: bool = True,
+    valid_percent: bool = True,
+    nodata: float | None = None,
+    size: int = 1024,
+) -> None:
     """A valid COG (COG driver) with, by default, embedded per-band statistics."""
     arr = (np.arange(size * size, dtype="uint8") % 251).reshape(1, size, size)
     with rasterio.open(
@@ -115,17 +122,20 @@ def write_cog(path: Path, *, stats: bool = True, size: int = 1024) -> None:
         transform=from_bounds(*BBOX, size, size),
         compress="deflate",
         blocksize=512,
+        nodata=nodata,
     ) as dst:
         dst.write(arr)
         if stats:
             band = arr[0]
-            dst.update_tags(
-                1,
-                STATISTICS_MINIMUM=str(float(band.min())),
-                STATISTICS_MAXIMUM=str(float(band.max())),
-                STATISTICS_MEAN=str(float(band.mean())),
-                STATISTICS_STDDEV=str(float(band.std())),
-            )
+            tags = {
+                "STATISTICS_MINIMUM": str(float(band.min())),
+                "STATISTICS_MAXIMUM": str(float(band.max())),
+                "STATISTICS_MEAN": str(float(band.mean())),
+                "STATISTICS_STDDEV": str(float(band.std())),
+            }
+            if valid_percent:
+                tags["STATISTICS_VALID_PERCENT"] = "100"
+            dst.update_tags(1, **tags)
 
 
 def write_plain_tiff(path: Path, *, size: int = 1024) -> None:
