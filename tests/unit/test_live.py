@@ -274,6 +274,42 @@ def test_duplicate_url_headed_once(catalog: CatalogBuilder) -> None:
     assert len(prober.head_calls) == 1
 
 
+def test_duplicate_url_still_checks_every_declared_size(catalog: CatalogBuilder) -> None:
+    # Two assets share one URL but disagree on file:size: at most one can be
+    # right. The HEAD is deduplicated, the check is not — found by dogfooding
+    # two collections pointing at the same hosted parquet.
+    catalog.collection(
+        "roads",
+        assets={
+            "right": _remote_asset(_URL, size=1234),
+            "wrong": _remote_asset(_URL, size=42),
+        },
+    )
+    graph = CatalogGraph.load(catalog.write())
+    prober = FakeProber(head_response=_good_head("1234"))
+    findings = validate_live(graph, prober)
+    assert len(prober.head_calls) == 1
+    assert _ids(findings) == [LIV_HEAD_LENGTH]
+    assert findings[0].json_pointer == "/assets/wrong"
+
+
+def test_source_and_alternate_assets_are_not_probed(catalog: CatalogBuilder) -> None:
+    # A source/alternate original lives on a server the publisher does not
+    # control (census.gov, an agency API); the hosting MUSTs bind the servers
+    # hosting the cloud-native primaries. Mirrors the data pass exemption.
+    source = _remote_asset("https://www2.census.gov/geo/tiger/counties.zip")
+    source["roles"] = ["data", "source"]
+    alternate = _remote_asset("https://api.example.gov/export.geojson")
+    alternate["roles"] = ["alternate"]
+    catalog.collection("roads", assets={"source": source, "alternate": alternate})
+    graph = CatalogGraph.load(catalog.write())
+    prober = FakeProber()
+    findings = validate_live(graph, prober)
+    assert prober.range_calls == []
+    assert prober.head_calls == []
+    assert _ids(findings) == [LIV_UNAVAILABLE]  # nothing probeable remains
+
+
 def test_probe_failure_is_warning_and_other_hosts_continue(catalog: CatalogBuilder) -> None:
     catalog.collection(
         "roads",

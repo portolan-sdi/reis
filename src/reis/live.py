@@ -154,6 +154,11 @@ def _targets_by_host(graph: CatalogGraph) -> dict[str, list[_Target]]:
             href = asset.get("href")
             if not isinstance(href, str):
                 continue
+            if _is_alternate(asset):
+                # A source/alternate original lives on a server the publisher
+                # does not control; the hosting MUSTs bind the servers hosting
+                # the cloud-native primaries. Mirrors the data pass exemption.
+                continue
             parsed = urlparse(href)
             if parsed.scheme.lower() != "https" or not parsed.netloc:
                 continue
@@ -167,6 +172,13 @@ def _targets_by_host(graph: CatalogGraph) -> dict[str, list[_Target]]:
                 )
             )
     return by_host
+
+
+def _is_alternate(asset: dict[str, Any]) -> bool:
+    roles = asset.get("roles")
+    if not isinstance(roles, list):
+        return False
+    return any(isinstance(role, str) and role in ("source", "alternate") for role in roles)
 
 
 def _header_set(value: str | None) -> set[str]:
@@ -298,24 +310,30 @@ def _check_head(target: _Target, response: ProbeResponse) -> list[Finding]:
 
 
 def _check_heads(host: str, targets: list[_Target], prober: Prober) -> list[Finding]:
+    """HEAD each distinct URL once, but check EVERY target against it.
+
+    Two assets may share one URL while disagreeing on ``file:size`` — at most
+    one of them can be right, so the response is cached per URL and the check
+    still runs per asset.
+    """
     findings: list[Finding] = []
-    seen: set[str] = set()
+    responses: dict[str, ProbeResponse] = {}
     for target in targets:
-        if target.url in seen:
-            continue
-        seen.add(target.url)
-        try:
-            response = prober.head(target.url)
-        except Exception as exc:  # noqa: BLE001 - a dead host is reported once
-            findings.append(
-                Finding(
-                    rule_id=LIV_UNAVAILABLE,
-                    severity=Severity.WARNING,
-                    message=f"HEAD probes against host '{host}' failed: {exc}",
-                    path=str(target.node.path),
+        response = responses.get(target.url)
+        if response is None:
+            try:
+                response = prober.head(target.url)
+            except Exception as exc:  # noqa: BLE001 - a dead host is reported once
+                findings.append(
+                    Finding(
+                        rule_id=LIV_UNAVAILABLE,
+                        severity=Severity.WARNING,
+                        message=f"HEAD probes against host '{host}' failed: {exc}",
+                        path=str(target.node.path),
+                    )
                 )
-            )
-            break
+                break
+            responses[target.url] = response
         findings.extend(_check_head(target, response))
     return findings
 
