@@ -16,6 +16,7 @@ from reis.data import (
     DAT_CONSISTENCY,
     DAT_FORMAT,
     DAT_ORDERING,
+    DAT_OVERVIEWS,
     DAT_ROWGROUP_SIZE,
     DAT_ROWGROUP_STATS,
     DAT_SIZE,
@@ -54,6 +55,7 @@ _DATA_RULE_IDS = frozenset(
         DAT_ROWGROUP_SIZE,
         DAT_COG_STATS,
         DAT_VALID_PERCENT,
+        DAT_OVERVIEWS,
     }
 )
 

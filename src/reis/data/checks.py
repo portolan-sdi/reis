@@ -16,6 +16,10 @@ and the real bytes into a :class:`reis.data.DataDefect`:
 - ``PTL-DAT-009`` COG bands lack embedded statistics (MUST, formats.md:95)
 - ``PTL-DAT-010`` a band lacks embedded valid percent (SHOULD; MUST — and thus
   an ERROR — when the band has a nodata value, formats.md:121)
+- ``PTL-DAT-011`` a raster larger than one 512px tile has no internal
+  overviews. ``cog_validate`` accepts such a file with only a warning, so the
+  COG-validity check alone never catches it; without overviews a zoomed-out
+  render reads every full-resolution byte, defeating the format's purpose.
 
 The ``STATISTICS_APPROXIMATE`` MUST-when-estimated cannot be checked from the
 bytes: whether the statistics were estimated is not knowable after the fact.
@@ -48,6 +52,7 @@ from reis.data import (
     DAT_CONSISTENCY,
     DAT_FORMAT,
     DAT_ORDERING,
+    DAT_OVERVIEWS,
     DAT_ROWGROUP_SIZE,
     DAT_ROWGROUP_STATS,
     DAT_SIZE,
@@ -295,7 +300,40 @@ def _check_raster(key: str, located: Locator) -> list[DataDefect]:
             )
         )
     defects.extend(_check_cog_stats(key, located))
+    defects.extend(_check_overviews(key, located))
     return defects
+
+
+# rio-cogeo's validation threshold: a raster within one 512px tile renders from
+# full resolution; anything larger needs overviews for zoomed-out reads.
+_MAX_UNOVERVIEWED = 512
+
+
+def _check_overviews(key: str, located: Locator) -> list[DataDefect]:
+    """A raster larger than one tile MUST carry internal overviews.
+
+    ``cog_validate`` reports a missing overview set as a warning only (the COG
+    layout itself is valid), so this is checked directly: the decimation list of
+    band 1, on a file whose either dimension exceeds one 512px tile. External
+    ``.ovr`` sidecars are already an error inside ``cog_validate``.
+    """
+    try:
+        with rasterio.Env(GDAL_PAM_ENABLED="NO"), rasterio.open(located.gdal_path()) as src:
+            oversized = max(src.width, src.height) > _MAX_UNOVERVIEWED
+            has_overviews = bool(src.overviews(1))
+    except Exception:  # noqa: BLE001 - unreadable raster: the COG check owns reporting it
+        return []
+    if oversized and not has_overviews:
+        return [
+            DataDefect(
+                DAT_OVERVIEWS,
+                Severity.ERROR,
+                f"asset '{key}' raster is {_MAX_UNOVERVIEWED}px-plus in at least one "
+                "dimension but carries no internal overviews",
+                key,
+            )
+        ]
+    return []
 
 
 def _check_cog_stats(key: str, located: Locator) -> list[DataDefect]:

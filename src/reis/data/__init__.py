@@ -40,6 +40,7 @@ DAT_ROWGROUP_STATS = "PTL-DAT-007"
 DAT_ROWGROUP_SIZE = "PTL-DAT-008"
 DAT_COG_STATS = "PTL-DAT-009"
 DAT_VALID_PERCENT = "PTL-DAT-010"
+DAT_OVERVIEWS = "PTL-DAT-011"
 
 # Assets are declared on collections and items; catalogs carry none.
 _DATA_KINDS: tuple[Kind, ...] = ("collection", "item")
