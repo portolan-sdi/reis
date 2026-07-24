@@ -14,6 +14,11 @@ and the real bytes into a :class:`reis.data.DataDefect`:
 - ``PTL-DAT-007`` no per-row-group spatial statistics (MUST, formats.md:39)
 - ``PTL-DAT-008`` a row group exceeds 150,000 rows (MUST, formats.md:50)
 - ``PTL-DAT-009`` COG bands lack embedded statistics (MUST, formats.md:95)
+- ``PTL-DAT-010`` a band lacks embedded valid percent (SHOULD; MUST — and thus
+  an ERROR — when the band has a nodata value, formats.md:121)
+
+The ``STATISTICS_APPROXIMATE`` MUST-when-estimated cannot be checked from the
+bytes: whether the statistics were estimated is not knowable after the fact.
 
 Checks that cannot run for a given asset — bytes unreachable, an unsupported
 hash function, an unreadable header — degrade to an INFO or to silence rather
@@ -46,6 +51,7 @@ from reis.data import (
     DAT_ROWGROUP_SIZE,
     DAT_ROWGROUP_STATS,
     DAT_SIZE,
+    DAT_VALID_PERCENT,
     DataDefect,
 )
 from reis.data.reader import AssetReader, Locator
@@ -84,6 +90,9 @@ _COG_STAT_KEYS = (
     "STATISTICS_MEAN",
     "STATISTICS_STDDEV",
 )
+
+# formats.md:121 — SHOULD per band, MUST when the band has a nodata value.
+_VALID_PERCENT_KEY = "STATISTICS_VALID_PERCENT"
 
 
 @dataclass(frozen=True)
@@ -290,16 +299,23 @@ def _check_raster(key: str, located: Locator) -> list[DataDefect]:
 
 
 def _check_cog_stats(key: str, located: Locator) -> list[DataDefect]:
-    """Every COG band MUST carry embedded min/max/mean/stddev (formats.md:95)."""
+    """Every COG band MUST carry embedded min/max/mean/stddev (formats.md:95),
+    and SHOULD carry a valid percent — a MUST when the band has a nodata value
+    (formats.md:121)."""
     try:
         # GDAL_PAM_ENABLED=NO ignores any .aux.xml sidecar, so only statistics
         # embedded in the file's GDAL_METADATA tag count — as the spec requires.
         with rasterio.Env(GDAL_PAM_ENABLED="NO"), rasterio.open(located.gdal_path()) as src:
-            missing = [
-                bidx
-                for bidx in range(1, src.count + 1)
-                if not all(stat in src.tags(bidx) for stat in _COG_STAT_KEYS)
-            ]
+            missing: list[int] = []
+            vp_should: list[int] = []  # valid percent absent, no nodata: SHOULD
+            vp_must: list[int] = []  # valid percent absent with nodata: MUST
+            for bidx in range(1, src.count + 1):
+                tags = src.tags(bidx)
+                if not all(stat in tags for stat in _COG_STAT_KEYS):
+                    missing.append(bidx)
+                if _VALID_PERCENT_KEY not in tags:
+                    has_nodata = src.nodatavals[bidx - 1] is not None
+                    (vp_must if has_nodata else vp_should).append(bidx)
     except Exception as exc:  # noqa: BLE001 - unreadable raster is advisory here
         return [
             DataDefect(
@@ -309,16 +325,36 @@ def _check_cog_stats(key: str, located: Locator) -> list[DataDefect]:
                 key,
             )
         ]
+    defects: list[DataDefect] = []
     if missing:
-        return [
+        defects.append(
             DataDefect(
                 DAT_COG_STATS,
                 Severity.ERROR,
                 f"asset '{key}' band(s) {missing} lack embedded min/max/mean/stddev statistics",
                 key,
             )
-        ]
-    return []
+        )
+    if vp_must:
+        defects.append(
+            DataDefect(
+                DAT_VALID_PERCENT,
+                Severity.ERROR,
+                f"asset '{key}' band(s) {vp_must} have a nodata value but lack the "
+                "embedded valid-percent statistic",
+                key,
+            )
+        )
+    if vp_should:
+        defects.append(
+            DataDefect(
+                DAT_VALID_PERCENT,
+                Severity.WARNING,
+                f"asset '{key}' band(s) {vp_should} lack the embedded valid-percent statistic",
+                key,
+            )
+        )
+    return defects
 
 
 def _check_consistency(
@@ -442,12 +478,57 @@ def _geo_metadata(parquet: Any) -> dict[str, Any] | None:
 def _row_group_bboxes(
     parquet: Any, geo: dict[str, Any]
 ) -> list[tuple[float, float, float, float]] | None:
+    """Per-row-group [minx, miny, maxx, maxy], from either statistics source.
+
+    formats.md:39 accepts two satisfiers: a 1.1 ``bbox`` covering column whose
+    leaf fields carry Parquet min/max, or — for GeoParquet 2.x / Parquet
+    ``GEOMETRY`` — native ``GeospatialStatistics`` per row group. The covering
+    column is preferred (it is RECOMMENDED even where native statistics exist);
+    the native statistics are the fallback. Returns None when neither source
+    yields a box for every row group.
+    """
+    boxes = _covering_bboxes(parquet, geo)
+    if boxes is None:
+        boxes = _native_bboxes(parquet, geo)
+    return boxes
+
+
+def _native_bboxes(
+    parquet: Any, geo: dict[str, Any]
+) -> list[tuple[float, float, float, float]] | None:
+    """Per-row-group boxes from Parquet native ``GeospatialStatistics``.
+
+    Read from the primary geometry column's chunk metadata (pyarrow >= 21
+    exposes ``geo_statistics``; older versions have no attribute and fall
+    through to None, keeping the covering column as the only satisfier).
+    """
+    primary = geo.get("primary_column")
+    if not isinstance(primary, str):
+        return None
+    meta = parquet.metadata
+    index = _column_index(meta)
+    j = index.get(primary)
+    if j is None:
+        return None
+    boxes: list[tuple[float, float, float, float]] = []
+    for i in range(meta.num_row_groups):
+        stats = getattr(meta.row_group(i).column(j), "geo_statistics", None)
+        if stats is None:
+            return None
+        corners = (stats.xmin, stats.ymin, stats.xmax, stats.ymax)
+        if None in corners:
+            return None
+        boxes.append(tuple(float(c) for c in corners))  # type: ignore[arg-type]
+    return boxes
+
+
+def _covering_bboxes(
+    parquet: Any, geo: dict[str, Any]
+) -> list[tuple[float, float, float, float]] | None:
     """Per-row-group [minx, miny, maxx, maxy] from the bbox covering column's stats.
 
-    Returns None when the file offers no usable per-row-group spatial statistics —
-    a 1.1 ``bbox`` covering column whose leaf fields carry Parquet min/max. Native
-    2.x ``GeospatialStatistics`` are not yet read (a known follow-up), so a 2.x file
-    without a covering column also returns None.
+    Returns None when the file has no 1.1 ``bbox`` covering column whose leaf
+    fields carry Parquet min/max statistics.
     """
     primary = geo.get("primary_column")
     columns = geo.get("columns")
