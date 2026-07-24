@@ -106,9 +106,15 @@ def write_cog(
     stats: bool = True,
     valid_percent: bool = True,
     nodata: float | None = None,
+    overviews: bool = True,
     size: int = 1024,
 ) -> None:
-    """A valid COG (COG driver) with, by default, embedded per-band statistics."""
+    """A valid COG (COG driver) with, by default, embedded per-band statistics.
+
+    ``overviews=False`` sets the COG driver's ``OVERVIEWS=NONE``: the file stays
+    a structurally valid COG (cog_validate passes it with only a warning) but
+    carries no internal overviews.
+    """
     arr = (np.arange(size * size, dtype="uint8") % 251).reshape(1, size, size)
     with rasterio.open(
         path,
@@ -121,8 +127,9 @@ def write_cog(
         crs="EPSG:4326",
         transform=from_bounds(*BBOX, size, size),
         compress="deflate",
-        blocksize=512,
+        blocksize=min(512, size),
         nodata=nodata,
+        overviews="AUTO" if overviews else "NONE",
     ) as dst:
         dst.write(arr)
         if stats:

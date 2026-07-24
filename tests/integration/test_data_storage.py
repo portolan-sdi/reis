@@ -23,6 +23,7 @@ from reis.data import (  # noqa: E402
     DAT_COG,
     DAT_COG_STATS,
     DAT_ORDERING,
+    DAT_OVERVIEWS,
     DAT_ROWGROUP_SIZE,
     DAT_ROWGROUP_STATS,
     DAT_VALID_PERCENT,
@@ -205,6 +206,23 @@ def test_missing_valid_percent_with_nodata_is_an_error(tmp_path: Path) -> None:
 def test_valid_percent_with_nodata_is_clean(tmp_path: Path) -> None:
     path = tmp_path / "vp_nodata.tif"
     assets.write_cog(path, nodata=0)
+    assert _raster(path) == []
+
+
+def test_missing_overviews_flag_dat_011(tmp_path: Path) -> None:
+    # cog_validate accepts an overview-less COG with only a warning, so the
+    # structural check alone (PTL-DAT-004) never catches this.
+    path = tmp_path / "no_ovr.tif"
+    assets.write_cog(path, overviews=False)
+    defects = _raster(path)
+    assert [d.rule_id for d in defects] == [DAT_OVERVIEWS]
+    assert defects[0].severity is Severity.ERROR
+
+
+def test_single_tile_raster_needs_no_overviews(tmp_path: Path) -> None:
+    # A raster no larger than one 512px tile renders from full resolution.
+    path = tmp_path / "small.tif"
+    assets.write_cog(path, overviews=False, size=256)
     assert _raster(path) == []
 
 
