@@ -8,11 +8,11 @@ Portolan conformance is defined by passing this validator. reis implements four 
 - the **structural pass** — STAC 1.1.0 core validity, delegated to [`stac-validator`](https://github.com/stac-utils/stac-validator) (the maintained `stac-valid` distribution). This validates each object against the STAC 1.1.0 *core* schema only; the extensions an object declares — including the Portolan profile — are the metadata pass's domain, so a not-yet-published extension schema never breaks it.
 - the **schema pass** — the published [Portolan profile schema](https://schema.portolan-sdi.org/v0.1.0/schema.json) applied directly to every object, which the spec calls the machine-checkable core of the metadata pass. reis implements those requirements by hand (for precise messages and fix hints), so this pass overlaps them by design: it is an authoritative cross-check that catches drift or gaps between the hand rules and the canonical schema. It is therefore **opt-in** (`--schema`), and a defect both catch is reported twice — once by a metadata rule, once by the schema.
 - the **data pass** — reads each asset's bytes, local files and remote `https` URLs alike, and checks them against the declared metadata and the format MUSTs: `file:checksum` and `file:size` recomputed from the bytes, the media type confirmed by magic number, and the data's own bbox/CRS checked against the object's. It also enforces the cloud-native storage MUSTs a metadata reader cannot see — a raster is a valid COG carrying embedded band statistics, and a GeoParquet is spatially ordered with per-row-group spatial statistics and row groups under 150,000 rows. It is **opt-in** (`--data`) because it reaches the network and needs the geospatial stack in the `reis[data]` extra; without that extra it emits one `PTL-DAT-000` warning and moves on. Because these storage MUSTs are stricter than what current tooling emits, a real catalog can fail the data pass on rules its metadata satisfies.
+- the **live-hosting pass** — probes the servers behind remote `https` assets for the spec's Data Storage MUSTs, which are properties of the server, not of any file: HTTP range support (`206 Partial Content`, `Accept-Ranges: bytes`, an accurate `Content-Length` on HEAD) and CORS for browser readers (a read-permitting `Access-Control-Allow-Origin`, the required response headers exposed, a preflight accepting `GET`/`HEAD` with `Range`). Range and CORS semantics are probed once per distinct host; only a cheap HEAD runs per asset. It is **opt-in** (`--live`), reaches the network, and is stdlib-only (no extra needed).
 
 Not covered here (separate passes):
 
-- deeper data checks (GeoParquet spatial ordering and row-group statistics, embedded COG overview statistics)
-- live-hosting checks (CORS, HTTP range requests)
+- deeper data checks (embedded COG overview statistics, Parquet 2.x native geospatial statistics)
 
 ## Install
 
@@ -30,6 +30,7 @@ reis check --json path/to/catalog
 reis check --no-structural path/to/catalog
 reis check --schema path/to/catalog
 reis check --data path/to/catalog
+reis check --live path/to/catalog
 ```
 
 Exit code 0 when the catalog passes (no errors; warnings and infos allowed), 1 when errors were found.
@@ -39,6 +40,8 @@ Exit code 0 when the catalog passes (no errors; warnings and infos allowed), 1 w
 `--schema` additionally runs the schema pass, fetching the Portolan profile schema from the URI the root catalog declares (falling back to `schema.portolan-sdi.org`) and validating every object against it. Like the structural pass it degrades to a single `PTL-SCH-000` warning when the schema is unreachable. It is off by default because it overlaps the metadata pass; turn it on to cross-check reis's hand rules against the canonical schema.
 
 `--data` additionally runs the data pass, reading each asset's bytes to verify the declared `file:checksum`, `file:size`, media type, and bbox/CRS, plus the cloud-native storage MUSTs: a valid COG with embedded band statistics, and a spatially ordered GeoParquet with per-row-group spatial statistics and bounded row groups. Relative hrefs resolve against the catalog tree; absolute `https` hrefs are fetched (checksum over a whole-object read, headers over range requests). It needs the `reis[data]` extra and degrades to a single `PTL-DAT-000` warning when the extra is absent; assets it cannot reach (`s3`, a missing local file) are skipped rather than failed.
+
+`--live` additionally runs the live-hosting pass, probing the servers behind absolute `https` asset hrefs for the Data Storage MUSTs: a ranged `GET` (sent with an `Origin` header, since servers omit every `Access-Control-*` header without one) checks `206`/`Accept-Ranges` and the simple-response CORS headers, an `OPTIONS` preflight checks the allowed methods and request headers, and a `HEAD` per asset checks `Content-Length` (against the declared `file:size` when present). Range and CORS are server properties, so those probes run once per distinct host. Source/alternate assets are exempt, as in the data pass: a retained original lives on a server the publisher does not control, and the hosting MUSTs bind the servers hosting the cloud-native primaries. Relative hrefs are not probeable from a local tree (a `--base-url` mapping is a planned follow-up); when nothing is probeable, or a host is unreachable, the pass degrades to `PTL-LIV-000` warnings.
 
 ## Library
 
@@ -52,10 +55,10 @@ for finding in report.findings:
           finding.path, finding.message)
 ```
 
-`validate` runs the metadata pass only. Add `structural=True` to also run the STAC structural pass, `schema=True` for the Portolan profile schema pass, or `data=True` for the data pass (all reach the network; `data=True` also needs the `reis[data]` extra). The CLI turns `structural` on by default:
+`validate` runs the metadata pass only. Add `structural=True` to also run the STAC structural pass, `schema=True` for the Portolan profile schema pass, `data=True` for the data pass, or `live=True` for the live-hosting pass (all reach the network; `data=True` also needs the `reis[data]` extra). The CLI turns `structural` on by default:
 
 ```python
-report = validate("path/to/catalog", structural=True, schema=True, data=True)
+report = validate("path/to/catalog", structural=True, schema=True, data=True, live=True)
 ```
 
 Rules can be disabled or re-severitied:
@@ -96,6 +99,7 @@ Findings carry a stable rule id (`PTL-<GROUP>-<NNN>`), a severity, a message, an
 | `PTL-VIZ` | 001–004 | thumbnail on geospatial collections, style assets for visual derivatives, PMTiles `rel:"pmtiles"` registration, large-vector-without-visual nudge |
 | `PTL-STR` | 000–001 | STAC 1.1.0 core structural validity (`stac-validator`); `000` warns when the pass could not run |
 | `PTL-DAT` | 000–009 | asset bytes vs metadata and the format MUSTs: `file:checksum`, `file:size`, format magic, bbox/CRS; valid COG with embedded band statistics; GeoParquet spatial ordering, per-row-group statistics, and row-group size; `000` warns when the `reis[data]` extra is absent. Source/alternate assets are exempt from the format MUSTs; plain (non-geo) Parquet is skipped |
+| `PTL-LIV` | 000–005 | the hosting server's Data Storage MUSTs, probed per host over absolute `https` asset hrefs: ranged GET honored (`206`, `Accept-Ranges: bytes`), HEAD `Content-Length` present and matching `file:size`, CORS origin allowed, required headers exposed, preflight accepting `GET`/`HEAD` with `Range`; source/alternate assets are exempt; `000` warns when nothing is probeable or a host is unreachable |
 | `PTL-PRT` | 001 | a partitioned collection advertises a glob pattern for its partitions |
 
 The catalog tree is loaded from a local directory. `CatalogGraph` (`src/reis/catalog.py`) is the single I/O layer for the metadata, loaded in one pass, so a remote (HTTP) catalog loader can slot in later; the data pass already reads asset bytes over `https`.

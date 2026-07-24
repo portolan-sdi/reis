@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from reis.config import RulesConfig
 from reis.data import validate_data
+from reis.live import validate_live
 from reis.model import Finding, Report, Severity
 from reis.runner import validate
 from reis.schema import validate_schema
@@ -25,6 +26,7 @@ __all__ = [
     "Severity",
     "validate",
     "validate_data",
+    "validate_live",
     "validate_schema",
     "validate_structural",
 ]

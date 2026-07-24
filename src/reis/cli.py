@@ -50,11 +50,20 @@ def main() -> None:
     default=False,
     help="Also verify asset bytes: checksum, size, format, extent (needs reis[data], network).",
 )
-def check(catalog_path: Path, as_json: bool, structural: bool, schema: bool, data: bool) -> None:
+@click.option(
+    "--live/--no-live",
+    "live",
+    default=False,
+    help="Also probe the servers behind https assets: HTTP range and CORS (needs network).",
+)
+def check(
+    catalog_path: Path, as_json: bool, structural: bool, schema: bool, data: bool, live: bool
+) -> None:
     """Validate CATALOG_PATH: the Portolan metadata pass, the STAC 1.1.0
-    structural pass (unless --no-structural), and — with --schema / --data — the
-    published Portolan profile schema and the asset bytes."""
-    report = validate(catalog_path, structural=structural, schema=schema, data=data)
+    structural pass (unless --no-structural), and — with --schema / --data /
+    --live — the published Portolan profile schema, the asset bytes, and the
+    hosting servers."""
+    report = validate(catalog_path, structural=structural, schema=schema, data=data, live=live)
     if as_json:
         click.echo(json_module.dumps(report.to_dict(), indent=2))
     else:
