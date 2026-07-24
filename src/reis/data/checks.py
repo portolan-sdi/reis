@@ -17,9 +17,11 @@ and the real bytes into a :class:`reis.data.DataDefect`:
 - ``PTL-DAT-010`` a band lacks embedded valid percent (SHOULD; MUST — and thus
   an ERROR — when the band has a nodata value, formats.md:121)
 - ``PTL-DAT-011`` a raster larger than one 512px tile has no internal
-  overviews. ``cog_validate`` accepts such a file with only a warning, so the
-  COG-validity check alone never catches it; without overviews a zoomed-out
-  render reads every full-resolution byte, defeating the format's purpose.
+  overviews. OGC 21-026 makes overviews optional in base COG but a SHALL in
+  its Optimized GeoTIFF conformance class (/req/optimized_geotiff) — the class
+  Portolan's efficient-range-request mandate targets. ``cog_validate`` checks
+  base COG, so it accepts such a file with only a warning; without overviews a
+  zoomed-out render reads every full-resolution byte.
 
 The ``STATISTICS_APPROXIMATE`` MUST-when-estimated cannot be checked from the
 bytes: whether the statistics were estimated is not knowable after the fact.
@@ -312,10 +314,11 @@ _MAX_UNOVERVIEWED = 512
 def _check_overviews(key: str, located: Locator) -> list[DataDefect]:
     """A raster larger than one tile MUST carry internal overviews.
 
-    ``cog_validate`` reports a missing overview set as a warning only (the COG
-    layout itself is valid), so this is checked directly: the decimation list of
-    band 1, on a file whose either dimension exceeds one 512px tile. External
-    ``.ovr`` sidecars are already an error inside ``cog_validate``.
+    A SHALL of OGC 21-026's Optimized GeoTIFF conformance class (optional in
+    base COG, which is why ``cog_validate`` reports the absence as a warning
+    only). Checked directly: the decimation list of band 1, on a file whose
+    either dimension exceeds one 512px tile. External ``.ovr`` sidecars are
+    already an error inside ``cog_validate``.
     """
     try:
         with rasterio.Env(GDAL_PAM_ENABLED="NO"), rasterio.open(located.gdal_path()) as src:
