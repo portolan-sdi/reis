@@ -23,10 +23,12 @@ from reis.data import (
     DAT_CONSISTENCY,
     DAT_FORMAT,
     DAT_ORDERING,
+    DAT_OVERVIEWS,
     DAT_ROWGROUP_SIZE,
     DAT_ROWGROUP_STATS,
     DAT_SIZE,
     DAT_UNAVAILABLE,
+    DAT_VALID_PERCENT,
     DataDefect,
     validate_data,
 )
@@ -162,6 +164,8 @@ def test_disabling_all_rules_skips_pass(catalog: CatalogBuilder) -> None:
             DAT_ROWGROUP_STATS,
             DAT_ROWGROUP_SIZE,
             DAT_COG_STATS,
+            DAT_VALID_PERCENT,
+            DAT_OVERVIEWS,
         }
     )
     validate(graph_root, config=RulesConfig(disabled=all_ids), data=True, data_validator=spy)
